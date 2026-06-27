@@ -1,4 +1,9 @@
 //@version=6
+// IMPORTANTE (regla dura Pine v6): el import de librerias va JUSTO despues de
+// //@version=6 y ANTES de indicator(). LibraryCOT v3 es la version migrada a
+// Pine v6 con "dynamic requests" (puede llamar request.security por dentro).
+// El alias NO puede chocar con ningun nombre de variable del script.
+import TradingView/LibraryCOT/3 as cot
 // =============================================================================
 // PineScope Pro — DASHBOARD (CENTRO DE MANDO)  ·  Pine Script v6 NATIVO
 // -----------------------------------------------------------------------------
@@ -11,16 +16,37 @@
 //
 // RECORDATORIO DURO: Pine NO llama a internet, NI a una IA, NI captura imagen.
 // Todo se CALCULA sobre OHLCV + request.security (multi-TF) con lookahead OFF.
-// La IA se conecta POR FUERA: este indicador EXPORTA un JSON v2.0 completo via
+// Los FUNDAMENTALES se leen con request.financial() a NIVEL GLOBAL (regla dura
+// de Pine v6: request.financial NUNCA dentro de funciones, bucles ni ramas).
+// La IA se conecta POR FUERA: este indicador EXPORTA un JSON v2.2 completo via
 // alert(); un servidor externo (ai-bridge/) lo recibe por webhook y lo manda a
 // la IA. Este archivo es solo el puente, no IA local.
 //
-// 9 MARCOS (orden fijo):  1m,3m,5m,15m,30m,1H,2H,4H,Diario
-//   en Pine:              "1","3","5","15","30","60","120","240","D"
-//   Grupo INTRADIA = {1m,3m,5m,15m,30m}   Grupo SWING = {1H,2H,4H,Diario}
+// 12 MARCOS (orden fijo):  1m,3m,5m,15m,30m,1H,2H,4H,Diario,Semanal,Mensual,Anual
+//   en Pine:               "1","3","5","15","30","60","120","240","D","W","M","12M"
+//   Grupo INTRADIA = {1m,3m,5m,15m,30m}
+//   Grupo SWING    = {1H,2H,4H,Diario}
+//   Grupo MACRO    = {Semanal,Mensual,Anual}
+//
+// CHECKLIST CUBIERTO (todo en este unico archivo, sin romper compilacion):
+//   - 12 marcos en la matriz; scoreGlobal suma los 12.
+//   - Resumen tactico con 3 grupos (INTRADIA / SWING / MACRO) y 6 columnas.
+//   - Tabla FUNDAMENTALES con request.financial (Ingresos/EBITDA/EBIT/Neto/EPS),
+//     ultimo + anual + crecimiento, mini-fila EBITDA 4T, f_money con n/d, na global.
+//   - Prediccion como TABLA en esquina (no etiqueta gigante por defecto) +
+//     selector de TF objetivo + R:R + aviso.
+//   - Tabla de indicadores extra (RSI / MACD / ATR / dist SMA200).
+//   - PANEL INSTITUCIONAL / FLUJO (el "Unusual Whales" nativo y gratis posible):
+//     internos de mercado (VIX, Put/Call, amplitud ADD/TRIN, Vol U/D) via
+//     request.security con ignore_invalid_symbol (na -> "n/d"), huella de
+//     volumen nativa del simbolo (RVOL, OBV, Acum/Dist, MFI, CMF, VWAP) y COT
+//     (Commitment of Traders) via LibraryCOT v3 con deteccion segura del codigo
+//     CFTC (acciones NO tienen COT -> "Sin COT"). Lectura RIESGO-ON/OFF/MIXTO.
+//   - Posiciones y toggles por input para CADA panel (no se solapan).
+//   - Export IA JSON v2.2: 12 marcos + fundamentales + bloque institucional.
 // =============================================================================
 
-indicator("PineScope Pro — Dashboard", shorttitle = "PineScope", overlay = true, max_lines_count = 500, max_labels_count = 500)
+indicator("PineScope Pro — Dashboard", shorttitle = "PineScope", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
 
 // =============================================================================
 // 0) PALETA (SPEC seccion 10 — tema oscuro, legible, profesional)
@@ -34,9 +60,14 @@ colTxt   = #D1D4DC   // texto
 colTxtT  = #8A93A2   // texto tenue
 colFila  = #141A24   // fila alterna sutil
 colBorde = #2A3242   // bordes
+colMacro = #7E57C2   // acento grupo MACRO (violeta)
+colFund  = #2D6CDF   // acento fundamentales (azul)
 
 // =============================================================================
 // 1) INPUTS  (on/off, posiciones, longitudes, umbrales, IA)
+// -----------------------------------------------------------------------------
+// CADA panel tiene su propio toggle y su propia posicion para que el usuario
+// pueda repartirlos por las esquinas y NO se solapen.
 // =============================================================================
 grpInd = "Indicadores base"
 lenEmaF   = input.int(12,  "EMA rapida",   minval = 1, group = grpInd)
@@ -53,17 +84,17 @@ lenATR    = input.int(14,  "ATR",          minval = 2, group = grpInd)
 
 grpMatriz = "Tabla MATRIZ (TF / ESTADO / FUERZA)"
 showMatriz = input.bool(true, "Mostrar matriz por marco", group = grpMatriz)
-posMatriz  = input.string("Arriba derecha", "Posicion matriz", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha"], group = grpMatriz)
+posMatriz  = input.string("Arriba derecha", "Posicion matriz", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpMatriz)
 
-grpTact = "Resumen TACTICO (INTRADIA / SWING)"
+grpTact = "Resumen TACTICO (INTRADIA / SWING / MACRO)"
 showTact = input.bool(true, "Mostrar resumen tactico", group = grpTact)
-posTact  = input.string("Abajo derecha", "Posicion resumen", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha"], group = grpTact)
+posTact  = input.string("Abajo derecha", "Posicion resumen", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpTact)
 umbralFuerte = input.float(3.0, "Umbral tendencia FUERTE (|score|)", minval = 0.5, step = 0.25, group = grpTact)
 umbralCero   = input.float(0.5, "Umbral zona NEUTRAL (|score|)", minval = 0.0, step = 0.25, group = grpTact)
 
 grpSem = "Semaforo"
 showSem   = input.bool(true, "Mostrar semaforo / veredicto", group = grpSem)
-threshSem = input.int(3, "Umbral semaforo (|score global|)", minval = 1, group = grpSem)
+threshSem = input.int(4, "Umbral semaforo (|score global|)", minval = 1, group = grpSem)
 
 grpSR = "Soportes / Resistencias (pivotes)"
 showSR   = input.bool(true, "Dibujar soporte / resistencia", group = grpSR)
@@ -71,8 +102,27 @@ pivLeft  = input.int(10, "Sensibilidad pivote izquierda", minval = 1, group = gr
 pivRight = input.int(10, "Sensibilidad pivote derecha",   minval = 1, group = grpSR)
 
 grpPred = "Prediccion por reglas"
-showPred = input.bool(true, "Mostrar etiqueta de prediccion", group = grpPred)
+showPred = input.bool(true, "Mostrar tabla de prediccion", group = grpPred)
+posPred  = input.string("Centro derecha", "Posicion prediccion", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpPred)
+showPredLbl = input.bool(false, "Tambien etiqueta flotante (opcional)", group = grpPred)
+tfPred   = input.string("Auto (segun grafico)", "TF objetivo de la prediccion", options = ["Auto (segun grafico)","Intradia (1m-30m)","Swing (1H-Diario)","Macro (Sem-Anual)"], group = grpPred)
 atrMult  = input.float(1.5, "Multiplo de ATR para el objetivo", minval = 0.1, step = 0.1, group = grpPred)
+
+grpExtra = "Indicadores EXTRA (RSI / MACD / ATR / dist SMA200)"
+showExtra = input.bool(true, "Mostrar tabla de indicadores extra", group = grpExtra)
+posExtra  = input.string("Abajo izquierda", "Posicion extra", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpExtra)
+
+grpFund = "FUNDAMENTALES (request.financial)"
+showFund = input.bool(true, "Mostrar tabla de fundamentales", group = grpFund)
+posFund  = input.string("Arriba izquierda", "Posicion fundamentales", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpFund)
+
+grpInst = "INSTITUCIONAL / FLUJO (internos + huella volumen + COT)"
+showInst = input.bool(true, "Mostrar panel institucional / flujo", group = grpInst)
+posInst  = input.string("Centro izquierda", "Posicion institucional", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpInst)
+lenRVOL  = input.int(20, "RVOL: media de volumen", minval = 2, group = grpInst)
+lenMFI   = input.int(14, "MFI: periodo", minval = 2, group = grpInst)
+lenCMF   = input.int(20, "CMF: periodo (Chaikin Money Flow)", minval = 2, group = grpInst)
+cotOpts  = input.bool(false, "COT: incluir opciones (futuros+opciones)", group = grpInst)
 
 grpPlot = "Plots de contexto"
 showEmas = input.bool(true, "Plotear EMAs y SMA200", group = grpPlot)
@@ -192,16 +242,19 @@ f_senales() =>
 f_tf(simple string _tf) =>
     request.security(syminfo.tickerid, _tf, f_senales(), lookahead = barmerge.lookahead_off)
 
-// --- Recolecta las 7 senales para los 9 marcos ---
-[t1,  k1,  se1,  sf1,  h1,  me1,  mf1 ] = f_tf("1")
-[t3,  k3,  se3,  sf3,  h3,  me3,  mf3 ] = f_tf("3")
-[t5,  k5,  se5,  sf5,  h5,  me5,  mf5 ] = f_tf("5")
-[t15, k15, se15, sf15, h15, me15, mf15] = f_tf("15")
-[t30, k30, se30, sf30, h30, me30, mf30] = f_tf("30")
-[t60, k60, se60, sf60, h60, me60, mf60] = f_tf("60")
-[t120,k120,se120,sf120,h120,me120,mf120] = f_tf("120")
-[t240,k240,se240,sf240,h240,me240,mf240] = f_tf("240")
-[tD,  kD,  seD,  sfD,  hD,  meD,  mfD ] = f_tf("D")
+// --- Recolecta las 7 senales para los 12 marcos ---
+[t1,   k1,   se1,   sf1,   h1,   me1,   mf1  ] = f_tf("1")
+[t3,   k3,   se3,   sf3,   h3,   me3,   mf3  ] = f_tf("3")
+[t5,   k5,   se5,   sf5,   h5,   me5,   mf5  ] = f_tf("5")
+[t15,  k15,  se15,  sf15,  h15,  me15,  mf15 ] = f_tf("15")
+[t30,  k30,  se30,  sf30,  h30,  me30,  mf30 ] = f_tf("30")
+[t60,  k60,  se60,  sf60,  h60,  me60,  mf60 ] = f_tf("60")
+[t120, k120, se120, sf120, h120, me120, mf120] = f_tf("120")
+[t240, k240, se240, sf240, h240, me240, mf240] = f_tf("240")
+[tD,   kD,   seD,   sfD,   hD,   meD,   mfD  ] = f_tf("D")
+[tW,   kW,   seW,   sfW,   hW,   meW,   mfW  ] = f_tf("W")
+[tM,   kM,   seM,   sfM,   hM,   meM,   mfM  ] = f_tf("M")
+[tY,   kY,   seY,   sfY,   hY,   meY,   mfY  ] = f_tf("12M")
 
 // =============================================================================
 // 3) TRADUCTORES DE CODIGOS A TEXTO + COLOR  (SPEC 4,5,6)
@@ -240,24 +293,26 @@ f_mcFuerzaTxt(int _c) =>
 
 // =============================================================================
 // 4) TENDENCIA UNIFICADA GLOBAL + SCORE GLOBAL (SPEC 6, 8)
+// -----------------------------------------------------------------------------
+// Score global = suma de los 12 scores unificados. Conteo de marcos a favor.
 // =============================================================================
-// Score global = suma de los 9 scores unificados. Conteo de marcos a favor.
-scoreGlobal = t1 + t3 + t5 + t15 + t30 + t60 + t120 + t240 + tD
+scoreGlobal = t1 + t3 + t5 + t15 + t30 + t60 + t120 + t240 + tD + tW + tM + tY
 
 f_isAlc(int _sc) => _sc > 0 ? 1 : 0
 f_isBaj(int _sc) => _sc < 0 ? 1 : 0
-nAlc = f_isAlc(t1)+f_isAlc(t3)+f_isAlc(t5)+f_isAlc(t15)+f_isAlc(t30)+f_isAlc(t60)+f_isAlc(t120)+f_isAlc(t240)+f_isAlc(tD)
-nBaj = f_isBaj(t1)+f_isBaj(t3)+f_isBaj(t5)+f_isBaj(t15)+f_isBaj(t30)+f_isBaj(t60)+f_isBaj(t120)+f_isBaj(t240)+f_isBaj(tD)
+nAlc = f_isAlc(t1)+f_isAlc(t3)+f_isAlc(t5)+f_isAlc(t15)+f_isAlc(t30)+f_isAlc(t60)+f_isAlc(t120)+f_isAlc(t240)+f_isAlc(tD)+f_isAlc(tW)+f_isAlc(tM)+f_isAlc(tY)
+nBaj = f_isBaj(t1)+f_isBaj(t3)+f_isBaj(t5)+f_isBaj(t15)+f_isBaj(t30)+f_isBaj(t60)+f_isBaj(t120)+f_isBaj(t240)+f_isBaj(tD)+f_isBaj(tW)+f_isBaj(tM)+f_isBaj(tY)
 nVal = nAlc + nBaj
 domTrend = nVal == 0 ? "NEUTRAL" : nBaj > nAlc ? "BAJISTA" : nAlc > nBaj ? "ALCISTA" : "NEUTRAL"
 domCount = math.max(nAlc, nBaj)
 
 // =============================================================================
-// 5) RESUMEN TACTICO INTRADIA / SWING  (SPEC 7)
+// 5) RESUMEN TACTICO INTRADIA / SWING / MACRO  (SPEC 7 extendido)
 // -----------------------------------------------------------------------------
 // SCORE float ponderado: cada marco aporta peso x signo(score unificado).
 //   intradia {1m:0.5, 3m:0.75, 5m:1, 15m:1.25, 30m:1.5}
 //   swing    {1H:1, 2H:1.25, 4H:1.5, Diario:2}
+//   macro    {Semanal:1.5, Mensual:2, Anual:2.5}
 // TENDENCIA, MOTOR (el marco MAS PEQUENO a favor), CONFIRMACION (marcos MAYORES
 // que confirman/faltan), LECTURA (frase accionable).
 // =============================================================================
@@ -266,9 +321,11 @@ f_sgn(int _sc) => _sc > 0 ? 1.0 : _sc < 0 ? -1.0 : 0.0
 // --- SCORE ponderado por grupo ---
 scoreIntra = 0.5*f_sgn(t1) + 0.75*f_sgn(t3) + 1.0*f_sgn(t5) + 1.25*f_sgn(t15) + 1.5*f_sgn(t30)
 scoreSwing = 1.0*f_sgn(t60) + 1.25*f_sgn(t120) + 1.5*f_sgn(t240) + 2.0*f_sgn(tD)
-// Redondeo a 2 decimales (da valores tipo -1.5, 2, 1.25, -5.5).
+scoreMacro = 1.5*f_sgn(tW) + 2.0*f_sgn(tM) + 2.5*f_sgn(tY)
+// Redondeo a 2 decimales.
 scoreIntraR = math.round(scoreIntra * 100) / 100
 scoreSwingR = math.round(scoreSwing * 100) / 100
+scoreMacroR = math.round(scoreMacro * 100) / 100
 
 // --- TENDENCIA por grupo (SPEC 7) ---
 f_tendencia(float _sc) =>
@@ -277,47 +334,49 @@ f_tendencia(float _sc) =>
 
 tendIntra = f_tendencia(scoreIntraR)
 tendSwing = f_tendencia(scoreSwingR)
+tendMacro = f_tendencia(scoreMacroR)
 
 // Signo de la tendencia del grupo (+1 alcista, -1 bajista, 0 neutral).
 f_tendSign(string _t) =>
     str.contains(_t, "ALCISTA") ? 1 : str.contains(_t, "BAJISTA") ? -1 : 0
 sgnIntra = f_tendSign(tendIntra)
 sgnSwing = f_tendSign(tendSwing)
+sgnMacro = f_tendSign(tendMacro)
 
 // --- MOTOR: el marco MAS PEQUENO del grupo cuyo ESTADO coincide con el signo ---
-// Etiquetas de marco por grupo (de menor a mayor).
 f_motorIntra(int _s) =>
     _s == 0 ? "sin motor claro" : (f_isAlc(t1)==1?1:0)*(_s>0?1:0)+(f_isBaj(t1)==1?1:0)*(_s<0?1:0) > 0 ? "1m" : (f_isAlc(t3)==1?1:0)*(_s>0?1:0)+(f_isBaj(t3)==1?1:0)*(_s<0?1:0) > 0 ? "3m" : (f_isAlc(t5)==1?1:0)*(_s>0?1:0)+(f_isBaj(t5)==1?1:0)*(_s<0?1:0) > 0 ? "5m" : (f_isAlc(t15)==1?1:0)*(_s>0?1:0)+(f_isBaj(t15)==1?1:0)*(_s<0?1:0) > 0 ? "15m" : (f_isAlc(t30)==1?1:0)*(_s>0?1:0)+(f_isBaj(t30)==1?1:0)*(_s<0?1:0) > 0 ? "30m" : "sin motor claro"
 
 f_motorSwing(int _s) =>
     _s == 0 ? "sin motor claro" : (f_isAlc(t60)==1?1:0)*(_s>0?1:0)+(f_isBaj(t60)==1?1:0)*(_s<0?1:0) > 0 ? "1H" : (f_isAlc(t120)==1?1:0)*(_s>0?1:0)+(f_isBaj(t120)==1?1:0)*(_s<0?1:0) > 0 ? "2H" : (f_isAlc(t240)==1?1:0)*(_s>0?1:0)+(f_isBaj(t240)==1?1:0)*(_s<0?1:0) > 0 ? "4H" : (f_isAlc(tD)==1?1:0)*(_s>0?1:0)+(f_isBaj(tD)==1?1:0)*(_s<0?1:0) > 0 ? "Diario" : "sin motor claro"
 
+f_motorMacro(int _s) =>
+    _s == 0 ? "sin motor claro" : (f_isAlc(tW)==1?1:0)*(_s>0?1:0)+(f_isBaj(tW)==1?1:0)*(_s<0?1:0) > 0 ? "Semanal" : (f_isAlc(tM)==1?1:0)*(_s>0?1:0)+(f_isBaj(tM)==1?1:0)*(_s<0?1:0) > 0 ? "Mensual" : (f_isAlc(tY)==1?1:0)*(_s>0?1:0)+(f_isBaj(tY)==1?1:0)*(_s<0?1:0) > 0 ? "Anual" : "sin motor claro"
+
 motorIntra = f_motorIntra(sgnIntra)
 motorSwing = f_motorSwing(sgnSwing)
+motorMacro = f_motorMacro(sgnMacro)
 
 // Texto "X manda arriba/abajo".
 f_motorTxt(string _m, int _s) =>
     _m == "sin motor claro" ? _m : _m + " manda " + (_s > 0 ? "arriba" : "abajo")
 motorTxtIntra = f_motorTxt(motorIntra, sgnIntra)
 motorTxtSwing = f_motorTxt(motorSwing, sgnSwing)
+motorTxtMacro = f_motorTxt(motorMacro, sgnMacro)
 
 // --- CONFIRMACION: marcos MAYORES que confirman vs faltan (texto dinamico) ---
-// Construye dos listas (a favor / en contra-o-falta) entre los marcos del grupo.
-// "confirma" = mismo signo que la tendencia; "falta" = no confirma.
 f_addList(string _acc, string _etq) =>
     _acc == "" ? _etq : _acc + "/" + _etq
 
-// INTRADIA: marcos mayores que el motor que confirman / faltan.
+// INTRADIA: marcos mayores (15m,30m) que confirman / faltan.
 f_confIntra(int _s) =>
     _conf = ""
     _falta = ""
     if _s != 0
         _confSig = _s
-        // 15m
         _c15 = (t15 > 0 ? 1 : t15 < 0 ? -1 : 0)
         _conf := _c15 == _confSig ? f_addList(_conf, "15m") : _conf
         _falta := _c15 != _confSig ? f_addList(_falta, "15m") : _falta
-        // 30m
         _c30 = (t30 > 0 ? 1 : t30 < 0 ? -1 : 0)
         _conf := _c30 == _confSig ? f_addList(_conf, "30m") : _conf
         _falta := _c30 != _confSig ? f_addList(_falta, "30m") : _falta
@@ -342,13 +401,30 @@ f_confSwing(int _s) =>
     _txtConf  = _conf  == "" ? "" : _conf  + " confirma " + _dir
     _txtFalta = _falta == "" ? "" : "falta " + _falta
     _cuerpo = _s == 0 ? "sin confirmacion" : _txtConf == "" ? _txtFalta : _txtFalta == "" ? _txtConf : _txtConf + " | " + _txtFalta
-    // Diario a favor / en contra respecto a la tendencia del swing.
     _cD = (tD > 0 ? 1 : tD < 0 ? -1 : 0)
     _diario = _s == 0 ? "" : _cD == _s ? " | Diario a favor" : _cD == 0 ? " | Diario plano" : " | Diario en contra"
     _cuerpo + _diario
 
+// MACRO: marcos mayores (Mensual,Anual) confirman/faltan + estado del Anual explicito.
+f_confMacro(int _s) =>
+    _conf = ""
+    _falta = ""
+    if _s != 0
+        _confSig = _s
+        _cM = (tM > 0 ? 1 : tM < 0 ? -1 : 0)
+        _conf := _cM == _confSig ? f_addList(_conf, "Mensual") : _conf
+        _falta := _cM != _confSig ? f_addList(_falta, "Mensual") : _falta
+        _cY = (tY > 0 ? 1 : tY < 0 ? -1 : 0)
+        _conf := _cY == _confSig ? f_addList(_conf, "Anual") : _conf
+        _falta := _cY != _confSig ? f_addList(_falta, "Anual") : _falta
+    _dir = _s > 0 ? "subida" : "caida"
+    _txtConf  = _conf  == "" ? "" : _conf  + " confirma " + _dir
+    _txtFalta = _falta == "" ? "" : "falta " + _falta
+    _s == 0 ? "sin confirmacion" : _txtConf == "" ? _txtFalta : _txtFalta == "" ? _txtConf : _txtConf + " | " + _txtFalta
+
 confIntra = f_confIntra(sgnIntra)
 confSwing = f_confSwing(sgnSwing)
+confMacro = f_confMacro(sgnMacro)
 
 // --- LECTURA accionable (SPEC 7) ---
 f_lecturaIntra(string _tend, float _sc) =>
@@ -357,18 +433,21 @@ f_lecturaIntra(string _tend, float _sc) =>
 f_lecturaSwing(string _tend, float _sc) =>
     _tend == "ALCISTA" or _tend == "POSIBLE ALCISTA" ? "Swing alcista en desarrollo" : _tend == "BAJISTA" or _tend == "POSIBLE BAJISTA" ? "Swing bajista en desarrollo / proteger" : "Swing lateral - esperar definicion"
 
+f_lecturaMacro(string _tend, float _sc) =>
+    _tend == "ALCISTA" or _tend == "POSIBLE ALCISTA" ? "Estructura mayor alcista" : _tend == "BAJISTA" or _tend == "POSIBLE BAJISTA" ? "Estructura mayor bajista / cautela" : "Estructura mayor sin definir"
+
 lectIntra = f_lecturaIntra(tendIntra, scoreIntraR)
 lectSwing = f_lecturaSwing(tendSwing, scoreSwingR)
+lectMacro = f_lecturaMacro(tendMacro, scoreMacroR)
 
 // =============================================================================
 // 6) SEMAFORO + VEREDICTO + LECTURA EJECUTIVA  (SPEC 8)
 // =============================================================================
 semaforo = scoreGlobal >= threshSem ? "VERDE" : scoreGlobal <= -threshSem ? "ROJO" : "AMARILLO"
-// Sin emojis: el COLOR es la senal del semaforo. colSem tine la etiqueta de
-// prediccion y la fila SEM. de la matriz (verde / ambar / rojo).
+// Sin emojis: el COLOR es la senal del semaforo.
 colSem   = semaforo == "VERDE" ? colAlc : semaforo == "ROJO" ? colBaj : colAviso
 
-// RSI del marco actual del grafico (para matiz sobrecompra/sobreventa del veredicto).
+// RSI del marco actual del grafico (matiz sobrecompra/sobreventa del veredicto).
 rsiChart = ta.rsi(close, lenRSI)
 
 veredicto = domTrend == "BAJISTA" and rsiChart < 35 ? "TECNICO BAJISTA PERO SOBREVENDIDA - PARA VIGILAR" : domTrend == "ALCISTA" and rsiChart > 65 ? "TECNICO ALCISTA PERO SOBRECOMPRADA - TOMAR CON CALMA" : "TENDENCIA " + domTrend + " - " + (close >= close[1] ? "MOMENTO VERDE" : "MOMENTO ROJO")
@@ -417,29 +496,206 @@ if barstate.islast and showSR
 
 // =============================================================================
 // 8) PREDICCION POR REGLAS  (SPEC 8 — objetivoSube / objetivoBaja con ATR + S/R)
+// -----------------------------------------------------------------------------
+// Selector de TF objetivo: el sesgo y la lectura cambian segun el grupo elegido.
+// R:R se calcula con los objetivos y un stop tecnico (el lado contrario).
 // =============================================================================
 atrChart = ta.atr(lenATR)
 objetivoSube = not na(resLevel) ? resLevel : close + atrMult * atrChart
 objetivoBaja = not na(supLevel) ? supLevel : close - atrMult * atrChart
 
-predDir   = domTrend == "ALCISTA" ? "PROBABLE SUBIDA" : domTrend == "BAJISTA" ? "PROBABLE BAJADA" : "LATERAL / INCIERTO"
+// Sesgo segun el TF objetivo elegido por el usuario.
+predTendObj = tfPred == "Intradia (1m-30m)" ? tendIntra : tfPred == "Swing (1H-Diario)" ? tendSwing : tfPred == "Macro (Sem-Anual)" ? tendMacro : domTrend
+predScoreObj = tfPred == "Intradia (1m-30m)" ? scoreIntraR : tfPred == "Swing (1H-Diario)" ? scoreSwingR : tfPred == "Macro (Sem-Anual)" ? scoreMacroR : scoreGlobal * 1.0
+predSign = str.contains(predTendObj, "ALCISTA") ? 1 : str.contains(predTendObj, "BAJISTA") ? -1 : 0
+predDir  = predSign > 0 ? "PROBABLE SUBIDA" : predSign < 0 ? "PROBABLE BAJADA" : "LATERAL / INCIERTO"
 
-var label predLbl = na
-if barstate.islast and showPred
-    label.delete(predLbl)
-    txtPred = "SEMAFORO " + semaforo + "  |  " + predDir + "\n" + "Veredicto: " + veredicto + "\n" + trendDetail + "\n" + "INTRADIA: " + tendIntra + " (" + str.tostring(scoreIntraR) + ") - " + lectIntra + "\n" + "SWING: " + tendSwing + " (" + str.tostring(scoreSwingR) + ") - " + lectSwing + "\n" + "Si sube -> " + str.tostring(objetivoSube, format.mintick) + "\n" + "Si baja -> " + str.tostring(objetivoBaja, format.mintick) + "\n" + "Orientativa: PUEDE FALLAR. No es recomendacion."
-    predLbl := label.new(bar_index, high, txtPred, style = label.style_label_lower_right, textcolor = color.white, color = color.new(colSem, 12), size = size.normal)
+// R:R: recorrido a favor / riesgo al stop contrario (en multiplos del recorrido).
+recSube = objetivoSube - close
+recBaja = close - objetivoBaja
+rr = predSign > 0 ? (recBaja > 0 ? recSube / recBaja : na) : predSign < 0 ? (recSube > 0 ? recBaja / recSube : na) : na
+rrTxt = na(rr) ? "n/d" : str.tostring(math.round(rr * 100) / 100) + " : 1"
+
+objetivoPrincipal = predSign >= 0 ? objetivoSube : objetivoBaja
+stopPrincipal     = predSign >= 0 ? objetivoBaja : objetivoSube
+
+// --- CONFLUENCIA EJECUTIVA: alineacion de los 3 grupos (INTRADIA/SWING/MACRO) ---
+// Se calcula aqui (antes de pintar la tabla de prediccion) para poder mostrarla
+// como ultima fila de esa tabla y enviarla tambien en el JSON de la IA.
+nGruposAlc = (sgnIntra > 0 ? 1 : 0) + (sgnSwing > 0 ? 1 : 0) + (sgnMacro > 0 ? 1 : 0)
+nGruposBaj = (sgnIntra < 0 ? 1 : 0) + (sgnSwing < 0 ? 1 : 0) + (sgnMacro < 0 ? 1 : 0)
+confluencia = nGruposAlc == 3 ? "ALINEACION ALCISTA TOTAL (3/3)" : nGruposBaj == 3 ? "ALINEACION BAJISTA TOTAL (3/3)" : nGruposAlc == 2 and nGruposBaj == 0 ? "Sesgo alcista (2/3)" : nGruposBaj == 2 and nGruposAlc == 0 ? "Sesgo bajista (2/3)" : nGruposAlc > nGruposBaj ? "Mixto, ligero alcista" : nGruposBaj > nGruposAlc ? "Mixto, ligero bajista" : "Mercado indeciso / lateral"
+colConf = nGruposAlc > nGruposBaj ? colAlc : nGruposBaj > nGruposAlc ? colBaj : colAviso
+consejoConf = nGruposAlc == 3 ? "Operar a favor: largos en retroceso" : nGruposBaj == 3 ? "Operar a favor: cortos en rebote" : nGruposAlc == 2 and nGruposBaj == 0 ? "Largos con stop ajustado" : nGruposBaj == 2 and nGruposAlc == 0 ? "Cortos con stop ajustado" : "Reducir tamano / esperar alineacion"
 
 // =============================================================================
-// 9) POSICIONES DE TABLA (input -> position.*)
+// 9) FUNDAMENTALES  (request.financial — GLOBAL, regla dura de Pine v6)
+// -----------------------------------------------------------------------------
+// request.financial NO puede ir dentro de funciones, ramas if ni bucles.
+// Por eso TODAS las llamadas viven aqui, a nivel global, y luego se usan.
+// Periodos:  "FQ" = ultimo trimestre,  "FY" = ultimo ano fiscal.
+// Si el simbolo no tiene fundamentales (forex, cripto, indices), devuelven na
+// y la tabla muestra "n/d" sin romper nada.
+// =============================================================================
+// --- Ingresos (Total Revenue) ---
+revQ  = request.financial(syminfo.tickerid, "TOTAL_REVENUE", "FQ", ignore_invalid_symbol = true)
+revY  = request.financial(syminfo.tickerid, "TOTAL_REVENUE", "FY", ignore_invalid_symbol = true)
+revY1 = request.financial(syminfo.tickerid, "TOTAL_REVENUE", "FY", ignore_invalid_symbol = true)[1]
+// --- EBITDA ---
+ebitdaQ  = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)
+ebitdaQ1 = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)[1]
+ebitdaQ2 = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)[2]
+ebitdaQ3 = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)[3]
+ebitdaY  = request.financial(syminfo.tickerid, "EBITDA", "FY", ignore_invalid_symbol = true)
+ebitdaY1 = request.financial(syminfo.tickerid, "EBITDA", "FY", ignore_invalid_symbol = true)[1]
+// --- EBIT (Operating Income) ---
+ebitQ = request.financial(syminfo.tickerid, "OPER_INCOME", "FQ", ignore_invalid_symbol = true)
+ebitY = request.financial(syminfo.tickerid, "OPER_INCOME", "FY", ignore_invalid_symbol = true)
+ebitY1 = request.financial(syminfo.tickerid, "OPER_INCOME", "FY", ignore_invalid_symbol = true)[1]
+// --- Beneficio Neto (Net Income) ---
+netQ = request.financial(syminfo.tickerid, "NET_INCOME", "FQ", ignore_invalid_symbol = true)
+netY = request.financial(syminfo.tickerid, "NET_INCOME", "FY", ignore_invalid_symbol = true)
+netY1 = request.financial(syminfo.tickerid, "NET_INCOME", "FY", ignore_invalid_symbol = true)[1]
+// --- EPS (Earnings per Share, basic) ---
+epsQ = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FQ", ignore_invalid_symbol = true)
+epsY = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FY", ignore_invalid_symbol = true)
+epsY1 = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FY", ignore_invalid_symbol = true)[1]
+
+// Hay fundamentales? (al menos ingresos o EPS no-na)
+hayFund = not na(revY) or not na(epsY) or not na(netY)
+
+// --- Formateadores ---
+// f_money: numero grande -> abreviado (K/M/B/T) con divisa; na -> "n/d".
+f_money(float _v) =>
+    if na(_v)
+        "n/d"
+    else
+        _abs = math.abs(_v)
+        _sfx = _abs >= 1e12 ? "T" : _abs >= 1e9 ? "B" : _abs >= 1e6 ? "M" : _abs >= 1e3 ? "K" : ""
+        _div = _abs >= 1e12 ? 1e12 : _abs >= 1e9 ? 1e9 : _abs >= 1e6 ? 1e6 : _abs >= 1e3 ? 1e3 : 1.0
+        _num = _v / _div
+        str.tostring(math.round(_num * 100) / 100) + _sfx
+
+// f_num: numero pequeno (EPS) con 2 decimales; na -> "n/d".
+f_num(float _v) =>
+    na(_v) ? "n/d" : str.tostring(math.round(_v * 100) / 100)
+
+// f_growth: crecimiento % entre _now y _prev; na o prev<=0 -> "n/d".
+f_growth(float _now, float _prev) =>
+    na(_now) or na(_prev) or _prev == 0 ? "n/d" : str.tostring(math.round(((_now - _prev) / math.abs(_prev)) * 1000) / 10) + "%"
+
+// Color del crecimiento (verde si +, rojo si -, tenue si n/d).
+f_growthCol(float _now, float _prev) =>
+    na(_now) or na(_prev) or _prev == 0 ? colTxtT : (_now - _prev) >= 0 ? colAlc : colBaj
+
+// =============================================================================
+// 9B) INSTITUCIONAL / FLUJO  (el "Unusual Whales" nativo y gratis posible)
+// -----------------------------------------------------------------------------
+// Tres familias de datos, TODOS nativos y verificados (ver informes 04 y 05):
+//   A) INTERNOS DE MERCADO via request.security(SYM, timeframe.period, close,
+//      ignore_invalid_symbol = true). Si la cuenta no tiene el simbolo devuelve
+//      na (NUNCA rompe) y lo mostramos como "n/d".
+//   B) HUELLA DE VOLUMEN nativa del simbolo actual (RVOL, OBV, Acum/Dist con
+//      pendiente, MFI, CMF a mano, VWAP). ta.obv y ta.accdist son VARIABLES.
+//   C) COT (Commitment of Traders) via LibraryCOT v3. SOLO futuros/indices/
+//      materias/divisas. Las ACCIONES no tienen COT -> deteccion segura del
+//      codigo CFTC ANTES de pedir nada (jamas se llama una funcion que lance
+//      runtime error). Patron seguro: convertRootToCOTCode("Auto") + length>0.
+//
+// RECORDATORIO: Pine NO puede leer options flow / dark pool / trades del
+// Congreso (sandbox sin internet de entrada). Esto es lo MAXIMO nativo y gratis.
+// =============================================================================
+
+// --- A) INTERNOS DE MERCADO (na -> "n/d", nunca rompe) -----------------------
+// Helper: pide un simbolo externo en el TF del grafico sin romper si no existe.
+f_intern(simple string _sym) =>
+    request.security(_sym, timeframe.period, close, ignore_invalid_symbol = true)
+
+vixVal  = f_intern("TVC:VIX")    // Volatilidad / miedo (>20 miedo, <15 calma)
+pccVal  = f_intern("USI:PCC")    // Put/Call TOTAL (equities + indices)
+pcceVal = f_intern("USI:PCCE")   // Put/Call ACCIONES (>1 miedo, <0.7 codicia)
+addVal  = f_intern("USI:ADD")    // Amplitud: avances netos (NYSE adv - decl)
+trinVal = f_intern("USI:TRIN")   // TRIN / Arms (inverso: >1 miedo)
+tickVal = f_intern("USI:TICK")   // NYSE TICK (amplitud intradia)
+uvolVal = f_intern("USI:UVOL")   // Volumen al alza
+dvolVal = f_intern("USI:DVOL")   // Volumen a la baja
+voldVal = f_intern("USI:VOLD")   // Volumen neto (UVOL - DVOL)
+
+// Ratio UVOL/DVOL (na si falta alguno o division invalida).
+udRatio = (na(uvolVal) or na(dvolVal) or dvolVal == 0) ? na : uvolVal / dvolVal
+
+// --- B) HUELLA DE VOLUMEN NATIVA del simbolo actual --------------------------
+// RVOL = volumen actual / media de volumen (>1.5 = volumen anormal).
+volMa  = ta.sma(volume, lenRVOL)
+rvol   = (na(volMa) or volMa == 0) ? na : volume / volMa
+// OBV (variable built-in, SIN parentesis) y su pendiente.
+obvVal  = ta.obv
+obvPend = obvVal - obvVal[1]
+// Acumulacion / Distribucion (variable built-in) y su pendiente.
+adVal  = ta.accdist
+adPend = adVal - adVal[1]
+// MFI (flujo de dinero, "RSI ponderado por volumen"): >80 sobrecompra, <20 sobreventa.
+mfiVal = ta.mfi(hlc3, lenMFI)
+// VWAP: precio por encima / por debajo.
+vwapVal = ta.vwap
+vwapPos = na(vwapVal) ? na : close > vwapVal ? 1 : close < vwapVal ? -1 : 0
+// Chaikin Money Flow (NO es built-in): formula manual, lenCMF periodos.
+cmfMult = (high == low) ? 0.0 : ((close - low) - (high - close)) / (high - low)
+cmfVol  = cmfMult * volume
+cmfDen  = math.sum(volume, lenCMF)
+cmfVal  = cmfDen == 0 ? na : math.sum(cmfVol, lenCMF) / cmfDen
+
+// --- C) COT (Commitment of Traders) via LibraryCOT v3 (PATRON SEGURO) --------
+// Detecta el codigo CFTC del simbolo del grafico. convertRootToCOTCode devuelve
+// "" (cadena vacia) cuando el root no tiene mapeo COT (acciones, cripto), NO
+// lanza runtime error (a diferencia de getCFTCCode, que SI lanzaria). Si el
+// codigo esta vacio NO se pide nada: hayCOT queda false y todo muestra "Sin COT".
+cftcCode = cot.convertRootToCOTCode("Auto")
+// Guarda doble: nunca usamos str.length sobre na (and corta por corto-circuito).
+hayCOT   = not na(cftcCode) and str.length(cftcCode) > 0
+
+// Helper para pedir una metrica Legacy del COT. SOLO se invoca cuando hayCOT es
+// true (ver ternarios abajo), de modo que requestCommitmentOfTraders nunca
+// recibe un codigo vacio/na. La libreria usa ignore_invalid_symbol por dentro.
+f_cotLegacy(simple string _metric, simple string _dir) =>
+    cot.requestCommitmentOfTraders("Legacy", cftcCode, cotOpts, _metric, _dir, "All")
+
+// Comerciales (instituciones que cubren / hedgers): neto = Long - Short.
+cotCommLong  = hayCOT ? f_cotLegacy("Commercial Positions", "Long")  : na
+cotCommShort = hayCOT ? f_cotLegacy("Commercial Positions", "Short") : na
+cotCommNet   = (na(cotCommLong) or na(cotCommShort)) ? na : cotCommLong - cotCommShort
+cotCommChg   = na(cotCommNet) ? na : cotCommNet - cotCommNet[1]
+// No comerciales (grandes especuladores / fondos): neto = Long - Short.
+cotNcLong    = hayCOT ? f_cotLegacy("Noncommercial Positions", "Long")  : na
+cotNcShort   = hayCOT ? f_cotLegacy("Noncommercial Positions", "Short") : na
+cotNcNet     = (na(cotNcLong) or na(cotNcShort)) ? na : cotNcLong - cotNcShort
+cotNcChg     = na(cotNcNet) ? na : cotNcNet - cotNcNet[1]
+
+// --- LECTURA INSTITUCIONAL (RIESGO-ON / RIESGO-OFF / MIXTO) -------------------
+// Combina VIX + put/call + amplitud + RVOL en un voto neto.
+//   Apetito (riesgo-ON):  VIX bajo, put/call bajo, amplitud positiva, RVOL alto.
+//   Miedo (riesgo-OFF):   VIX alto, put/call alto, amplitud negativa.
+votoRiesgo = 0
+votoRiesgo := votoRiesgo + (na(vixVal)  ? 0 : vixVal < 15 ? 1 : vixVal > 20 ? -1 : 0)
+votoRiesgo := votoRiesgo + (na(pcceVal) ? 0 : pcceVal < 0.7 ? 1 : pcceVal > 1.0 ? -1 : 0)
+votoRiesgo := votoRiesgo + (na(addVal)  ? 0 : addVal > 0 ? 1 : addVal < 0 ? -1 : 0)
+votoRiesgo := votoRiesgo + (na(udRatio) ? 0 : udRatio > 1.5 ? 1 : udRatio < 0.67 ? -1 : 0)
+// RVOL solo amplifica (no decide direccion): si hay volumen anormal, refuerza el signo.
+rvolFuerte = not na(rvol) and rvol > 1.5
+lecturaInst = votoRiesgo >= 2 ? "RIESGO-ON (apetito)" : votoRiesgo <= -2 ? "RIESGO-OFF (miedo/cobertura)" : "MIXTO"
+lecturaInstFull = lecturaInst + (rvolFuerte ? " | volumen anormal" : "")
+colLectInst = votoRiesgo >= 2 ? colAlc : votoRiesgo <= -2 ? colBaj : colAviso
+
+// =============================================================================
+// 10) POSICIONES DE TABLA (input -> position.*)
 // =============================================================================
 f_pos(string _s) =>
-    _s == "Arriba izquierda" ? position.top_left : _s == "Arriba derecha" ? position.top_right : _s == "Abajo izquierda" ? position.bottom_left : _s == "Abajo derecha" ? position.bottom_right : position.middle_right
+    _s == "Arriba izquierda" ? position.top_left : _s == "Arriba derecha" ? position.top_right : _s == "Abajo izquierda" ? position.bottom_left : _s == "Abajo derecha" ? position.bottom_right : _s == "Centro derecha" ? position.middle_right : _s == "Centro izquierda" ? position.middle_left : _s == "Arriba centro" ? position.top_center : _s == "Abajo centro" ? position.bottom_center : position.middle_right
 
 // =============================================================================
-// 10) TABLA MATRIZ UNIFICADA  (TF / ESTADO / FUERZA — SPEC 6)
+// 11) TABLA MATRIZ UNIFICADA  (TF / ESTADO / FUERZA — SPEC 6, 12 marcos)
 // -----------------------------------------------------------------------------
-// Una fila por marco (9) + cabecera + fila semaforo. Coloreada por signo.
+// Una fila por marco (12) + cabecera + fila semaforo. Coloreada por signo.
 // =============================================================================
 var table tblM = na
 
@@ -451,30 +707,34 @@ f_filaMatriz(table _t, int _row, string _etq, int _sc) =>
     table.cell(_t, 2, _row, f_trendFuerza(_sc), text_color = f_colSign(_sc), text_size = size.small, bgcolor = f_bgSign(_sc))
 
 if showMatriz and barstate.islast
-    tblM := table.new(f_pos(posMatriz), 3, 11, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    // 1 cabecera + 12 marcos + 1 fila semaforo = 14 filas.
+    tblM := table.new(f_pos(posMatriz), 3, 14, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera.
     table.cell(tblM, 0, 0, "TF",     text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
     table.cell(tblM, 1, 0, "ESTADO", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
     table.cell(tblM, 2, 0, "FUERZA", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    // 9 marcos.
-    f_filaMatriz(tblM, 1, "1m",     t1)
-    f_filaMatriz(tblM, 2, "3m",     t3)
-    f_filaMatriz(tblM, 3, "5m",     t5)
-    f_filaMatriz(tblM, 4, "15m",    t15)
-    f_filaMatriz(tblM, 5, "30m",    t30)
-    f_filaMatriz(tblM, 6, "1H",     t60)
-    f_filaMatriz(tblM, 7, "2H",     t120)
-    f_filaMatriz(tblM, 8, "4H",     t240)
-    f_filaMatriz(tblM, 9, "Diario", tD)
+    // 12 marcos.
+    f_filaMatriz(tblM, 1,  "1m",      t1)
+    f_filaMatriz(tblM, 2,  "3m",      t3)
+    f_filaMatriz(tblM, 3,  "5m",      t5)
+    f_filaMatriz(tblM, 4,  "15m",     t15)
+    f_filaMatriz(tblM, 5,  "30m",     t30)
+    f_filaMatriz(tblM, 6,  "1H",      t60)
+    f_filaMatriz(tblM, 7,  "2H",      t120)
+    f_filaMatriz(tblM, 8,  "4H",      t240)
+    f_filaMatriz(tblM, 9,  "Diario",  tD)
+    f_filaMatriz(tblM, 10, "Semanal", tW)
+    f_filaMatriz(tblM, 11, "Mensual", tM)
+    f_filaMatriz(tblM, 12, "Anual",   tY)
     // Fila semaforo.
-    table.cell(tblM, 0, 10, "SEM.", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblM, 1, 10, semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
-    table.cell(tblM, 2, 10, str.tostring(domCount) + "/" + str.tostring(nVal), text_color = colTxt, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 0, 13, "SEM.", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 1, 13, semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    table.cell(tblM, 2, 13, str.tostring(domCount) + "/" + str.tostring(nVal), text_color = colTxt, text_size = size.small, bgcolor = color.new(colHead, 0))
 
 // =============================================================================
-// 11) RESUMEN TACTICO  (MARCO / TENDENCIA / MOTOR / CONFIRMACION / SCORE / LECTURA)
+// 12) RESUMEN TACTICO  (MARCO / TENDENCIA / MOTOR / CONFIRMACION / SCORE / LECTURA)
 // -----------------------------------------------------------------------------
-// Dos filas: INTRADIA y SWING. Las 6 columnas EXACTAS de la imagen (SPEC 7).
+// Tres filas: INTRADIA, SWING y MACRO. Las 6 columnas EXACTAS de la imagen.
 // =============================================================================
 var table tblT = na
 
@@ -483,8 +743,18 @@ f_colTend(string _t) =>
 f_bgTend(string _t) =>
     str.contains(_t, "ALCISTA") ? color.new(colAlc, 80) : str.contains(_t, "BAJISTA") ? color.new(colBaj, 80) : color.new(colAviso, 82)
 
+// Helper para una fila tactica completa (6 columnas).
+f_filaTact(table _t, int _row, string _grupo, string _tend, string _motor, string _conf, float _score, string _lect, color _bg) =>
+    table.cell(_t, 0, _row, _grupo, text_color = colTxt, text_size = size.small, bgcolor = _bg)
+    table.cell(_t, 1, _row, _tend, text_color = f_colTend(_tend), text_size = size.small, bgcolor = f_bgTend(_tend))
+    table.cell(_t, 2, _row, _motor, text_color = colTxt, text_size = size.small, bgcolor = _bg)
+    table.cell(_t, 3, _row, _conf, text_color = colTxt, text_size = size.small, bgcolor = _bg)
+    table.cell(_t, 4, _row, str.tostring(_score), text_color = _score > 0 ? colAlc : _score < 0 ? colBaj : colAviso, text_size = size.small, bgcolor = _bg)
+    table.cell(_t, 5, _row, _lect, text_color = colTxt, text_size = size.small, bgcolor = _bg)
+
 if showTact and barstate.islast
-    tblT := table.new(f_pos(posTact), 6, 3, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    // 1 cabecera + 3 grupos = 4 filas.
+    tblT := table.new(f_pos(posTact), 6, 4, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera (6 columnas exactas).
     table.cell(tblT, 0, 0, "MARCO",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
     table.cell(tblT, 1, 0, "TENDENCIA",    text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
@@ -492,23 +762,268 @@ if showTact and barstate.islast
     table.cell(tblT, 3, 0, "CONFIRMACION", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
     table.cell(tblT, 4, 0, "SCORE",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
     table.cell(tblT, 5, 0, "LECTURA",      text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    // Fila INTRADIA.
-    table.cell(tblT, 0, 1, "INTRADIA",   text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblT, 1, 1, tendIntra,    text_color = f_colTend(tendIntra), text_size = size.small, bgcolor = f_bgTend(tendIntra))
-    table.cell(tblT, 2, 1, motorTxtIntra,text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblT, 3, 1, confIntra,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblT, 4, 1, str.tostring(scoreIntraR), text_color = scoreIntraR > 0 ? colAlc : scoreIntraR < 0 ? colBaj : colAviso, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblT, 5, 1, lectIntra,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
-    // Fila SWING.
-    table.cell(tblT, 0, 2, "SWING",      text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblT, 1, 2, tendSwing,    text_color = f_colTend(tendSwing), text_size = size.small, bgcolor = f_bgTend(tendSwing))
-    table.cell(tblT, 2, 2, motorTxtSwing,text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblT, 3, 2, confSwing,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblT, 4, 2, str.tostring(scoreSwingR), text_color = scoreSwingR > 0 ? colAlc : scoreSwingR < 0 ? colBaj : colAviso, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblT, 5, 2, lectSwing,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
+    // Fila INTRADIA / SWING / MACRO.
+    f_filaTact(tblT, 1, "INTRADIA", tendIntra, motorTxtIntra, confIntra, scoreIntraR, lectIntra, color.new(colFila, 0))
+    f_filaTact(tblT, 2, "SWING",    tendSwing, motorTxtSwing, confSwing, scoreSwingR, lectSwing, color.new(colFondo, 0))
+    f_filaTact(tblT, 3, "MACRO",    tendMacro, motorTxtMacro, confMacro, scoreMacroR, lectMacro, color.new(colMacro, 86))
 
 // =============================================================================
-// 12) PLOTS DE CONTEXTO  (no tapan el precio)
+// 13) TABLA DE PREDICCION (en esquina, NO etiqueta gigante por defecto)
+// -----------------------------------------------------------------------------
+// Muestra: TF objetivo, semaforo, sesgo, objetivo, stop, R:R y aviso.
+// =============================================================================
+var table tblP = na
+
+if showPred and barstate.islast
+    tblP := table.new(f_pos(posPred), 2, 10, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    // Cabecera.
+    table.cell(tblP, 0, 0, "PREDICCION", text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    table.cell(tblP, 1, 0, predDir, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    // TF objetivo.
+    table.cell(tblP, 0, 1, "TF objetivo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 1, tfPred, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Semaforo.
+    table.cell(tblP, 0, 2, "Semaforo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 2, semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    // Sesgo (tendencia del TF objetivo + su score).
+    table.cell(tblP, 0, 3, "Sesgo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 3, predTendObj + " (" + str.tostring(predScoreObj) + ")", text_color = f_colTend(predTendObj), text_size = size.small, bgcolor = f_bgTend(predTendObj))
+    // Objetivo.
+    table.cell(tblP, 0, 4, "Objetivo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 4, str.tostring(objetivoPrincipal, format.mintick), text_color = predSign >= 0 ? colAlc : colBaj, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Stop tecnico.
+    table.cell(tblP, 0, 5, "Stop tecnico", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 5, str.tostring(stopPrincipal, format.mintick), text_color = predSign >= 0 ? colBaj : colAlc, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // R:R.
+    table.cell(tblP, 0, 6, "R:R", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 6, rrTxt, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Objetivos alternativos (sube / baja).
+    table.cell(tblP, 0, 7, "Sube / Baja", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 7, str.tostring(objetivoSube, format.mintick) + " / " + str.tostring(objetivoBaja, format.mintick), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Confluencia (alineacion de los 3 grupos) + consejo.
+    table.cell(tblP, 0, 8, "Confluencia", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 8, confluencia + " - " + consejoConf, text_color = colConf, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Aviso.
+    table.cell(tblP, 0, 9, "Aviso", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 9, "Orientativa: PUEDE FALLAR. No es recomendacion.", text_color = colAviso, text_size = size.small, bgcolor = color.new(colFila, 0))
+
+// Etiqueta flotante OPCIONAL (off por defecto; el panel principal es la tabla).
+var label predLbl = na
+if barstate.islast and showPredLbl
+    label.delete(predLbl)
+    txtPred = "SEMAFORO " + semaforo + "  |  " + predDir + "\n" + "TF objetivo: " + tfPred + " -> " + predTendObj + " (" + str.tostring(predScoreObj) + ")\n" + "Objetivo: " + str.tostring(objetivoPrincipal, format.mintick) + "  |  Stop: " + str.tostring(stopPrincipal, format.mintick) + "  |  R:R " + rrTxt + "\n" + "Confluencia: " + confluencia + " - " + consejoConf + "\n" + "Orientativa: PUEDE FALLAR. No es recomendacion."
+    predLbl := label.new(bar_index, high, txtPred, style = label.style_label_lower_right, textcolor = color.white, color = color.new(colSem, 12), size = size.normal)
+
+// =============================================================================
+// 14) TABLA DE INDICADORES EXTRA  (RSI / MACD / ATR / dist SMA200)
+// -----------------------------------------------------------------------------
+// Valores del marco ACTUAL del grafico, con lectura corta y color por estado.
+// =============================================================================
+[macdLineCh, macdSigCh, _macdHistCh] = ta.macd(close, macdFast, macdSlow, macdSig)
+macdHistCh = macdLineCh - macdSigCh
+smaCh = ta.sma(close, lenSma)
+distSma = smaCh != 0 ? (close - smaCh) / smaCh * 100 : na   // % respecto a SMA200
+atrPct  = close != 0 ? atrChart / close * 100 : na           // ATR como % del precio
+
+rsiTxt = na(rsiChart) ? "n/d" : str.tostring(math.round(rsiChart * 10) / 10)
+rsiLec = na(rsiChart) ? "n/d" : rsiChart >= 70 ? "Sobrecompra" : rsiChart <= 30 ? "Sobreventa" : rsiChart > 55 ? "Fuerza alcista" : rsiChart < 45 ? "Fuerza bajista" : "Neutral"
+rsiCol = na(rsiChart) ? colTxtT : rsiChart >= 70 ? colBaj : rsiChart <= 30 ? colAlc : rsiChart > 55 ? colAlc : rsiChart < 45 ? colBaj : colAviso
+
+macdTxt = na(macdHistCh) ? "n/d" : str.tostring(macdHistCh, "#.####")
+macdLec = na(macdHistCh) ? "n/d" : macdHistCh > 0 ? (macdHistCh > macdHistCh[1] ? "Impulso alcista" : "Alcista debil") : macdHistCh < 0 ? (macdHistCh < macdHistCh[1] ? "Impulso bajista" : "Bajista debil") : "Plano"
+macdCol = na(macdHistCh) ? colTxtT : macdHistCh > 0 ? colAlc : macdHistCh < 0 ? colBaj : colAviso
+
+atrTxt = na(atrChart) ? "n/d" : str.tostring(atrChart, format.mintick) + (na(atrPct) ? "" : " (" + str.tostring(math.round(atrPct * 10) / 10) + "%)")
+atrLec = na(atrPct) ? "n/d" : atrPct >= 3 ? "Volatilidad alta" : atrPct <= 0.7 ? "Volatilidad baja" : "Volatilidad normal"
+
+distTxt = na(distSma) ? "n/d" : str.tostring(math.round(distSma * 10) / 10) + "%"
+distLec = na(distSma) ? "n/d" : distSma > 0 ? "Sobre SMA200" : distSma < 0 ? "Bajo SMA200" : "En SMA200"
+distCol = na(distSma) ? colTxtT : distSma > 0 ? colAlc : distSma < 0 ? colBaj : colAviso
+
+var table tblE = na
+if showExtra and barstate.islast
+    // 1 cabecera + 4 indicadores = 5 filas, 3 columnas.
+    tblE := table.new(f_pos(posExtra), 3, 5, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    table.cell(tblE, 0, 0, "INDICADOR", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblE, 1, 0, "VALOR",     text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblE, 2, 0, "LECTURA",   text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    // RSI.
+    table.cell(tblE, 0, 1, "RSI " + str.tostring(lenRSI), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 1, 1, rsiTxt, text_color = rsiCol, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 2, 1, rsiLec, text_color = rsiCol, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // MACD hist.
+    table.cell(tblE, 0, 2, "MACD hist", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 1, 2, macdTxt, text_color = macdCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 2, 2, macdLec, text_color = macdCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    // ATR.
+    table.cell(tblE, 0, 3, "ATR " + str.tostring(lenATR), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 1, 3, atrTxt, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 2, 3, atrLec, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Dist SMA200.
+    table.cell(tblE, 0, 4, "Dist SMA200", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 1, 4, distTxt, text_color = distCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 2, 4, distLec, text_color = distCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
+
+// =============================================================================
+// 15) TABLA DE FUNDAMENTALES  (request.financial — ultimo + anual + crecimiento)
+// -----------------------------------------------------------------------------
+// Columnas: METRICA / ULTIMO (FQ) / ANUAL (FY) / CRECIMIENTO (FY vs FY-1).
+// Mini-fila EBITDA 4T = suma de los ultimos 4 trimestres (proxy TTM).
+// Si el simbolo no tiene fundamentales, todo muestra "n/d".
+// =============================================================================
+// EBITDA TTM (ultimos 4 trimestres) — solo suma si los 4 existen.
+ebitdaTTM = (na(ebitdaQ) or na(ebitdaQ1) or na(ebitdaQ2) or na(ebitdaQ3)) ? na : ebitdaQ + ebitdaQ1 + ebitdaQ2 + ebitdaQ3
+
+var table tblF = na
+if showFund and barstate.islast
+    // 1 cabecera + 5 metricas + 1 mini-fila EBITDA 4T = 7 filas, 4 columnas.
+    tblF := table.new(f_pos(posFund), 4, 7, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    // Cabecera.
+    table.cell(tblF, 0, 0, hayFund ? "FUNDAMENTALES" : "FUNDAMENTALES (n/d)", text_color = color.white, text_size = size.small, bgcolor = color.new(colFund, 0))
+    table.cell(tblF, 1, 0, "ULTIMO", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 2, 0, "ANUAL",  text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 3, 0, "CREC.",  text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    // Ingresos.
+    table.cell(tblF, 0, 1, "Ingresos", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 1, 1, f_money(revQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 2, 1, f_money(revY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 3, 1, f_growth(revY, revY1), text_color = f_growthCol(revY, revY1), text_size = size.small, bgcolor = color.new(colFila, 0))
+    // EBITDA.
+    table.cell(tblF, 0, 2, "EBITDA", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 1, 2, f_money(ebitdaQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 2, 2, f_money(ebitdaY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 3, 2, f_growth(ebitdaY, ebitdaY1), text_color = f_growthCol(ebitdaY, ebitdaY1), text_size = size.small, bgcolor = color.new(colFondo, 0))
+    // EBIT.
+    table.cell(tblF, 0, 3, "EBIT", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 1, 3, f_money(ebitQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 2, 3, f_money(ebitY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 3, 3, f_growth(ebitY, ebitY1), text_color = f_growthCol(ebitY, ebitY1), text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Beneficio Neto.
+    table.cell(tblF, 0, 4, "Neto", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 1, 4, f_money(netQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 2, 4, f_money(netY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 3, 4, f_growth(netY, netY1), text_color = f_growthCol(netY, netY1), text_size = size.small, bgcolor = color.new(colFondo, 0))
+    // EPS.
+    table.cell(tblF, 0, 5, "EPS", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 1, 5, f_num(epsQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 2, 5, f_num(epsY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 3, 5, f_growth(epsY, epsY1), text_color = f_growthCol(epsY, epsY1), text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Mini-fila: EBITDA 4T (TTM, suma de los ultimos 4 trimestres).
+    table.cell(tblF, 0, 6, "EBITDA 4T", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 1, 6, f_money(ebitdaTTM), text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 2, 6, "TTM (4Q)", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 3, 6, f_growth(ebitdaQ, ebitdaQ3), text_color = f_growthCol(ebitdaQ, ebitdaQ3), text_size = size.tiny, bgcolor = color.new(colHead, 0))
+
+// =============================================================================
+// 15B) TABLA INSTITUCIONAL / FLUJO  (VIX / Put-Call / Amplitud / Vol / OBV /
+//      Acum-Dist / MFI / CMF / VWAP / COT) + Lectura institucional
+// -----------------------------------------------------------------------------
+// Columnas: METRICA / VALOR / ESTADO. Color verde/rojo/ambar por estado.
+// Donde no haya dato -> "n/d" (na). COT en acciones -> "Sin COT".
+// =============================================================================
+// --- Formateadores especificos del panel institucional -----------------------
+// f_fmt2: float -> 2 decimales, na -> "n/d".
+f_fmt2(float _v) =>
+    na(_v) ? "n/d" : str.tostring(math.round(_v * 100) / 100)
+// f_big: numero grande con signo abreviado (para OBV / A/D / COT), na -> "n/d".
+f_big(float _v) =>
+    if na(_v)
+        "n/d"
+    else
+        _abs = math.abs(_v)
+        _sfx = _abs >= 1e12 ? "T" : _abs >= 1e9 ? "B" : _abs >= 1e6 ? "M" : _abs >= 1e3 ? "K" : ""
+        _div = _abs >= 1e12 ? 1e12 : _abs >= 1e9 ? 1e9 : _abs >= 1e6 ? 1e6 : _abs >= 1e3 ? 1e3 : 1.0
+        str.tostring(math.round((_v / _div) * 100) / 100) + _sfx
+// f_pendTxt: traduce una pendiente a flecha textual (na -> "n/d").
+f_pendTxt(float _p) =>
+    na(_p) ? "n/d" : _p > 0 ? "subiendo" : _p < 0 ? "bajando" : "plano"
+// Color generico por signo de un float (na -> tenue).
+f_colF(float _v) =>
+    na(_v) ? colTxtT : _v > 0 ? colAlc : _v < 0 ? colBaj : colAviso
+
+// --- Estados textuales + color por metrica -----------------------------------
+// VIX: <15 calma (verde), >20 miedo (rojo), intermedio neutral.
+vixTxt = f_fmt2(vixVal)
+vixEst = na(vixVal) ? "n/d" : vixVal > 20 ? "MIEDO" : vixVal < 15 ? "CALMA" : "NEUTRAL"
+vixCol = na(vixVal) ? colTxtT : vixVal > 20 ? colBaj : vixVal < 15 ? colAlc : colAviso
+// Put/Call (total + equities). >1 mas puts = cobertura/miedo; <0.7 mas calls = codicia.
+pcTxt = (na(pccVal) ? "n/d" : f_fmt2(pccVal)) + " / " + (na(pcceVal) ? "n/d" : f_fmt2(pcceVal))
+pcEst = na(pcceVal) ? "n/d" : pcceVal > 1.0 ? "MIEDO (puts)" : pcceVal < 0.7 ? "CODICIA (calls)" : "NEUTRAL"
+pcCol = na(pcceVal) ? colTxtT : pcceVal > 1.0 ? colBaj : pcceVal < 0.7 ? colAlc : colAviso
+// Amplitud (ADD + TRIN). ADD>0 amplitud sana; TRIN inverso (>1 miedo).
+ampTxt = (na(addVal) ? "n/d" : f_big(addVal)) + " / " + (na(trinVal) ? "n/d" : f_fmt2(trinVal))
+ampEst = na(addVal) ? "n/d" : addVal > 0 ? "AMPLITUD +" : addVal < 0 ? "AMPLITUD -" : "PLANA"
+ampCol = na(addVal) ? colTxtT : addVal > 0 ? colAlc : addVal < 0 ? colBaj : colAviso
+// Volumen U/D (ratio + neto). Ratio>1.5 empuje alcista; <0.67 liquidacion.
+volTxt = (na(udRatio) ? "n/d" : f_fmt2(udRatio) + "x") + " / " + (na(voldVal) ? "n/d" : f_big(voldVal))
+volEst = na(udRatio) ? "n/d" : udRatio > 1.5 ? "EMPUJE ALZA" : udRatio < 0.67 ? "LIQUIDACION" : "EQUILIBRADO"
+volCol = na(udRatio) ? colTxtT : udRatio > 1.5 ? colAlc : udRatio < 0.67 ? colBaj : colAviso
+// RVOL: >1.5 volumen anormal (interes fuerte), <0.7 apatico.
+rvolTxt = na(rvol) ? "n/d" : f_fmt2(rvol) + "x"
+rvolEst = na(rvol) ? "n/d" : rvol > 1.5 ? "ANORMAL (fuerte)" : rvol < 0.7 ? "Apatico" : "Normal"
+rvolCol = na(rvol) ? colTxtT : rvol > 1.5 ? colAlc : rvol < 0.7 ? colBaj : colAviso
+// OBV: por pendiente (presion compradora/vendedora acumulada).
+obvTxt = f_pendTxt(obvPend)
+obvCol = f_colF(obvPend)
+// Acumulacion / Distribucion: por pendiente.
+adTxt = f_pendTxt(adPend)
+adCol = f_colF(adPend)
+// MFI: >80 sobrecompra, <20 sobreventa.
+mfiTxt = f_fmt2(mfiVal)
+mfiEst = na(mfiVal) ? "n/d" : mfiVal > 80 ? "SOBRECOMPRA" : mfiVal < 20 ? "SOBREVENTA" : mfiVal > 55 ? "Flujo +" : mfiVal < 45 ? "Flujo -" : "Neutral"
+mfiCol = na(mfiVal) ? colTxtT : mfiVal > 80 ? colBaj : mfiVal < 20 ? colAlc : mfiVal > 55 ? colAlc : mfiVal < 45 ? colBaj : colAviso
+// CMF: >0 acumulacion, <0 distribucion.
+cmfTxt = f_fmt2(cmfVal)
+cmfEst = na(cmfVal) ? "n/d" : cmfVal > 0.05 ? "ACUMULACION" : cmfVal < -0.05 ? "DISTRIBUCION" : "Neutral"
+cmfCol = na(cmfVal) ? colTxtT : cmfVal > 0.05 ? colAlc : cmfVal < -0.05 ? colBaj : colAviso
+// VWAP: precio por encima (alcista) / por debajo (bajista).
+vwapTxt = na(vwapVal) ? "n/d" : str.tostring(vwapVal, format.mintick)
+vwapEst = na(vwapPos) ? "n/d" : vwapPos > 0 ? "PRECIO ENCIMA" : vwapPos < 0 ? "PRECIO DEBAJO" : "EN VWAP"
+vwapCol = na(vwapPos) ? colTxtT : vwapPos > 0 ? colAlc : vwapPos < 0 ? colBaj : colAviso
+// COT comerciales: neto + cambio. Si no hay COT -> "Sin COT".
+cotComTxt = not hayCOT ? "Sin COT" : na(cotCommNet) ? "n/d" : f_big(cotCommNet) + " (" + f_pendTxt(cotCommChg) + ")"
+cotComCol = not hayCOT ? colTxtT : f_colF(cotCommNet)
+// COT especuladores: neto + cambio.
+cotEspTxt = not hayCOT ? "Sin COT" : na(cotNcNet) ? "n/d" : f_big(cotNcNet) + " (" + f_pendTxt(cotNcChg) + ")"
+cotEspCol = not hayCOT ? colTxtT : f_colF(cotNcNet)
+
+// Helper para una fila del panel institucional (3 columnas, fila alterna).
+f_filaInst(table _t, int _row, string _etq, string _val, string _est, color _col) =>
+    _bgFila = _row % 2 == 0 ? color.new(colFila, 0) : color.new(colFondo, 0)
+    table.cell(_t, 0, _row, _etq, text_color = colTxt, text_size = size.small, bgcolor = _bgFila)
+    table.cell(_t, 1, _row, _val, text_color = colTxt, text_size = size.small, bgcolor = _bgFila)
+    table.cell(_t, 2, _row, _est, text_color = _col, text_size = size.small, bgcolor = _bgFila)
+
+var table tblI = na
+if showInst and barstate.islast
+    // 1 cabecera + 12 metricas + 1 fila lectura = 14 filas, 3 columnas.
+    tblI := table.new(f_pos(posInst), 3, 14, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    // Cabecera.
+    table.cell(tblI, 0, 0, "INSTITUCIONAL", text_color = color.white, text_size = size.small, bgcolor = color.new(colFund, 0))
+    table.cell(tblI, 1, 0, "VALOR",  text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblI, 2, 0, "ESTADO", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    // Filas internos de mercado.
+    f_filaInst(tblI, 1,  "VIX",          vixTxt,  vixEst,  vixCol)
+    f_filaInst(tblI, 2,  "Put/Call T/Eq",pcTxt,   pcEst,   pcCol)
+    f_filaInst(tblI, 3,  "Amplitud A/T", ampTxt,  ampEst,  ampCol)
+    f_filaInst(tblI, 4,  "Vol U/D",      volTxt,  volEst,  volCol)
+    // Filas huella de volumen nativa del simbolo.
+    f_filaInst(tblI, 5,  "RVOL",         rvolTxt, rvolEst, rvolCol)
+    f_filaInst(tblI, 6,  "OBV",          f_big(obvVal), obvTxt, obvCol)
+    f_filaInst(tblI, 7,  "Acum/Dist",    f_big(adVal),  adTxt,  adCol)
+    f_filaInst(tblI, 8,  "MFI " + str.tostring(lenMFI), mfiTxt, mfiEst, mfiCol)
+    f_filaInst(tblI, 9,  "CMF " + str.tostring(lenCMF), cmfTxt, cmfEst, cmfCol)
+    f_filaInst(tblI, 10, "VWAP",         vwapTxt, vwapEst, vwapCol)
+    // Filas COT (comercial = cobertura institucional, especulador = grandes fondos).
+    f_filaInst(tblI, 11, "COT comercial",   cotComTxt, hayCOT ? "Cobertura" : "Sin COT", cotComCol)
+    f_filaInst(tblI, 12, "COT especulador", cotEspTxt, hayCOT ? "Especuladores" : "Sin COT", cotEspCol)
+    // Fila resumen: Lectura institucional (RIESGO-ON / RIESGO-OFF / MIXTO).
+    table.cell(tblI, 0, 13, "Lectura", text_color = color.white, text_size = size.small, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 1, 13, "RIESGO", text_color = color.white, text_size = size.small, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 2, 13, lecturaInstFull, text_color = color.white, text_size = size.small, bgcolor = color.new(colLectInst, 0))
+
+// =============================================================================
+// 16) PLOTS DE CONTEXTO  (no tapan el precio)
 // =============================================================================
 emaFPlot = ta.ema(close, lenEmaF)
 emaSPlot = ta.ema(close, lenEmaS)
@@ -518,38 +1033,200 @@ plot(showEmas ? emaSPlot : na, "EMA lenta",  color = color.new(colAviso, 0), lin
 plot(showEmas ? smaPlot  : na, "SMA larga",  color = color.new(colTxtT, 0), linewidth = 2)
 
 // =============================================================================
-// 13) EXPORT IA  (JSON v2.0 de UNA linea via alert — SPEC 9)
+// 17) EXPORT IA  (JSON v2.2 de UNA linea via alert — SPEC 9, 12 marcos + fund + inst)
 // -----------------------------------------------------------------------------
-// Cuando "Emitir IA" esta activo, en el cierre de cada vela se emite el JSON v2.0
-// COMPLETO: por-marco {trend,stochK,stochEstado,stochFuerza,macdHist,macdEstado,
-// macdFuerza}, intradia, swing, niveles, prediccion y secret.
+// Cuando "Emitir IA" esta activo, en el cierre de cada vela se emite el JSON v2.2
+// COMPLETO: por-marco (12) {trend,stochK,stochEstado,stochFuerza,macdHist,
+// macdEstado,macdFuerza}, intradia, swing, macro, niveles, prediccion,
+// fundamentales, institucional (internos + huella volumen + COT) y secret.
 // Para activarlo: crea una alerta sobre este indicador con condicion "Any alert()
 // function call" y apunta el webhook a tu servidor ai-bridge.
 // =============================================================================
-// Bloque JSON de UN marco. trend como texto; numeros con formato; estados/fuerzas
-// traducidos a texto. Se escapan comillas usando el helper de cadena.
 f_q(string _s) => "\"" + _s + "\""
+
+// Numero JSON seguro: na -> null (sin comillas).
+f_jnum(float _v) =>
+    na(_v) ? "null" : str.tostring(_v)
+f_jmoney(float _v) =>
+    na(_v) ? "null" : str.tostring(_v, "#.##")
 
 f_jsonTF(string _etq, int _t, float _k, int _se, int _sf, float _h, int _me, int _mf) =>
     f_q(_etq) + ":{" + f_q("trend") + ":" + f_q(f_trendEstado(_t)) + "," + f_q("stochK") + ":" + str.tostring(_k, "#.##") + "," + f_q("stochEstado") + ":" + f_q(f_stEstadoTxt(_se)) + "," + f_q("stochFuerza") + ":" + f_q(f_stFuerzaTxt(_sf)) + "," + f_q("macdHist") + ":" + str.tostring(_h, "#.####") + "," + f_q("macdEstado") + ":" + f_q(f_mcEstadoTxt(_me)) + "," + f_q("macdFuerza") + ":" + f_q(f_mcFuerzaTxt(_mf)) + "}"
 
 if emitAI and barstate.isconfirmed
-    tfBlock = "{" + f_jsonTF("1m",  t1,  k1,  se1,  sf1,  h1,  me1,  mf1 ) + "," + f_jsonTF("3m",  t3,  k3,  se3,  sf3,  h3,  me3,  mf3 ) + "," + f_jsonTF("5m",  t5,  k5,  se5,  sf5,  h5,  me5,  mf5 ) + "," + f_jsonTF("15m", t15, k15, se15, sf15, h15, me15, mf15) + "," + f_jsonTF("30m", t30, k30, se30, sf30, h30, me30, mf30) + "," + f_jsonTF("1H",  t60, k60, se60, sf60, h60, me60, mf60) + "," + f_jsonTF("2H",  t120,k120,se120,sf120,h120,me120,mf120) + "," + f_jsonTF("4H",  t240,k240,se240,sf240,h240,me240,mf240) + "," + f_jsonTF("Diario", tD, kD, seD, sfD, hD, meD, mfD) + "}"
+    tfBlock = "{" + f_jsonTF("1m",  t1,  k1,  se1,  sf1,  h1,  me1,  mf1 ) + "," + f_jsonTF("3m",  t3,  k3,  se3,  sf3,  h3,  me3,  mf3 ) + "," + f_jsonTF("5m",  t5,  k5,  se5,  sf5,  h5,  me5,  mf5 ) + "," + f_jsonTF("15m", t15, k15, se15, sf15, h15, me15, mf15) + "," + f_jsonTF("30m", t30, k30, se30, sf30, h30, me30, mf30) + "," + f_jsonTF("1H",  t60, k60, se60, sf60, h60, me60, mf60) + "," + f_jsonTF("2H",  t120,k120,se120,sf120,h120,me120,mf120) + "," + f_jsonTF("4H",  t240,k240,se240,sf240,h240,me240,mf240) + "," + f_jsonTF("Diario", tD, kD, seD, sfD, hD, meD, mfD) + "," + f_jsonTF("Semanal", tW, kW, seW, sfW, hW, meW, mfW) + "," + f_jsonTF("Mensual", tM, kM, seM, sfM, hM, meM, mfM) + "," + f_jsonTF("Anual", tY, kY, seY, sfY, hY, meY, mfY) + "}"
 
     intradiaBlock = "{" + f_q("tendencia") + ":" + f_q(tendIntra) + "," + f_q("motor") + ":" + f_q(motorIntra) + "," + f_q("confirmacion") + ":" + f_q(confIntra) + "," + f_q("score") + ":" + str.tostring(scoreIntraR) + "," + f_q("lectura") + ":" + f_q(lectIntra) + "}"
 
     swingBlock = "{" + f_q("tendencia") + ":" + f_q(tendSwing) + "," + f_q("motor") + ":" + f_q(motorSwing) + "," + f_q("confirmacion") + ":" + f_q(confSwing) + "," + f_q("score") + ":" + str.tostring(scoreSwingR) + "," + f_q("lectura") + ":" + f_q(lectSwing) + "}"
 
+    macroBlock = "{" + f_q("tendencia") + ":" + f_q(tendMacro) + "," + f_q("motor") + ":" + f_q(motorMacro) + "," + f_q("confirmacion") + ":" + f_q(confMacro) + "," + f_q("score") + ":" + str.tostring(scoreMacroR) + "," + f_q("lectura") + ":" + f_q(lectMacro) + "}"
+
     nivelesBlock = "{" + f_q("soporte") + ":" + (na(supLevel) ? "null" : str.tostring(supLevel, format.mintick)) + "," + f_q("resistencia") + ":" + (na(resLevel) ? "null" : str.tostring(resLevel, format.mintick)) + "}"
 
-    prediccionBlock = "{" + f_q("objetivoSube") + ":" + str.tostring(objetivoSube, format.mintick) + "," + f_q("objetivoBaja") + ":" + str.tostring(objetivoBaja, format.mintick) + "}"
+    prediccionBlock = "{" + f_q("tfObjetivo") + ":" + f_q(tfPred) + "," + f_q("sesgo") + ":" + f_q(predTendObj) + "," + f_q("objetivo") + ":" + str.tostring(objetivoPrincipal, format.mintick) + "," + f_q("stop") + ":" + str.tostring(stopPrincipal, format.mintick) + "," + f_q("rr") + ":" + (na(rr) ? "null" : str.tostring(math.round(rr * 100) / 100)) + "," + f_q("objetivoSube") + ":" + str.tostring(objetivoSube, format.mintick) + "," + f_q("objetivoBaja") + ":" + str.tostring(objetivoBaja, format.mintick) + "," + f_q("confluencia") + ":" + f_q(confluencia) + "," + f_q("consejo") + ":" + f_q(consejoConf) + "}"
 
-    jsonMsg = "{" + f_q("app") + ":" + f_q("PineScope") + "," + f_q("v") + ":" + f_q("2.0") + "," + f_q("secret") + ":" + f_q(secretAI) + "," + f_q("symbol") + ":" + f_q(syminfo.ticker) + "," + f_q("price") + ":" + str.tostring(close, format.mintick) + "," + f_q("chartTF") + ":" + f_q(timeframe.period) + "," + f_q("semaforo") + ":" + f_q(semaforo) + "," + f_q("scoreGlobal") + ":" + str.tostring(scoreGlobal) + "," + f_q("tf") + ":" + tfBlock + "," + f_q("intradia") + ":" + intradiaBlock + "," + f_q("swing") + ":" + swingBlock + "," + f_q("niveles") + ":" + nivelesBlock + "," + f_q("prediccion") + ":" + prediccionBlock + "}"
+    fundamentalesBlock = "{" + f_q("hayDatos") + ":" + (hayFund ? "true" : "false") + "," + f_q("ingresosQ") + ":" + f_jmoney(revQ) + "," + f_q("ingresosY") + ":" + f_jmoney(revY) + "," + f_q("ebitdaQ") + ":" + f_jmoney(ebitdaQ) + "," + f_q("ebitdaY") + ":" + f_jmoney(ebitdaY) + "," + f_q("ebitdaTTM") + ":" + f_jmoney(ebitdaTTM) + "," + f_q("ebitQ") + ":" + f_jmoney(ebitQ) + "," + f_q("ebitY") + ":" + f_jmoney(ebitY) + "," + f_q("netoQ") + ":" + f_jmoney(netQ) + "," + f_q("netoY") + ":" + f_jmoney(netY) + "," + f_q("epsQ") + ":" + f_jnum(epsQ) + "," + f_q("epsY") + ":" + f_jnum(epsY) + "}"
+
+    // Bloque INSTITUCIONAL (internos + huella volumen + COT). na -> null.
+    institucionalBlock = "{" + f_q("vix") + ":" + f_jnum(vixVal) + "," + f_q("putCall") + ":" + f_jnum(pccVal) + "," + f_q("putCallEq") + ":" + f_jnum(pcceVal) + "," + f_q("breadth") + ":" + f_jnum(addVal) + "," + f_q("trin") + ":" + f_jnum(trinVal) + "," + f_q("volUD") + ":" + f_jnum(udRatio) + "," + f_q("rvol") + ":" + f_jnum(rvol) + "," + f_q("mfi") + ":" + f_jnum(mfiVal) + "," + f_q("cmf") + ":" + f_jnum(cmfVal) + "," + f_q("vwapPos") + ":" + f_jnum(vwapPos) + "," + f_q("hayCOT") + ":" + (hayCOT ? "true" : "false") + "," + f_q("cotComercial") + ":" + f_jnum(cotCommNet) + "," + f_q("cotEspec") + ":" + f_jnum(cotNcNet) + "," + f_q("lectura") + ":" + f_q(lecturaInst) + "}"
+
+    jsonMsg = "{" + f_q("app") + ":" + f_q("PineScope") + "," + f_q("v") + ":" + f_q("2.2") + "," + f_q("secret") + ":" + f_q(secretAI) + "," + f_q("symbol") + ":" + f_q(syminfo.ticker) + "," + f_q("price") + ":" + str.tostring(close, format.mintick) + "," + f_q("chartTF") + ":" + f_q(timeframe.period) + "," + f_q("semaforo") + ":" + f_q(semaforo) + "," + f_q("scoreGlobal") + ":" + str.tostring(scoreGlobal) + "," + f_q("tf") + ":" + tfBlock + "," + f_q("intradia") + ":" + intradiaBlock + "," + f_q("swing") + ":" + swingBlock + "," + f_q("macro") + ":" + macroBlock + "," + f_q("niveles") + ":" + nivelesBlock + "," + f_q("prediccion") + ":" + prediccionBlock + "," + f_q("fundamentales") + ":" + fundamentalesBlock + "," + f_q("institucional") + ":" + institucionalBlock + "}"
 
     alert(jsonMsg, alert.freq_once_per_bar_close)
 
 // =============================================================================
-// 14) ALERTAS LEGIBLES PREDEFINIDAS (ademas del export IA)
+// 18) ALERTAS LEGIBLES PREDEFINIDAS (ademas del export IA)
+// -----------------------------------------------------------------------------
+// Estas alertas son "humanas" (texto plano) y NO dependen del webhook IA. Sirven
+// para avisos rapidos al movil sin montar el servidor ai-bridge.
 // =============================================================================
 alertcondition(ta.crossover(emaFPlot, emaSPlot),  "Cruce alcista EMAs", "PineScope: cruce ALCISTA de EMAs")
 alertcondition(ta.crossunder(emaFPlot, emaSPlot), "Cruce bajista EMAs", "PineScope: cruce BAJISTA de EMAs")
+alertcondition(scoreGlobal >= threshSem  and scoreGlobal[1] < threshSem,  "Semaforo VERDE", "PineScope: semaforo VERDE - score global alcista")
+alertcondition(scoreGlobal <= -threshSem and scoreGlobal[1] > -threshSem, "Semaforo ROJO",  "PineScope: semaforo ROJO - score global bajista")
+
+// =============================================================================
+// 19) LEYENDA / MAPA DE CODIGOS  (documentacion para el usuario)
+// -----------------------------------------------------------------------------
+// Esta seccion es SOLO comentarios: no genera codigo, pero deja en el propio
+// archivo la traduccion de cada codigo interno y la logica de cada tabla. Asi el
+// indicador es auto-explicativo y la IA externa puede usarla como referencia.
+//
+// SCORE UNIFICADO POR MARCO  (rango -4..+4):
+//   +1 si EMA rapida > EMA lenta           (-1 si al reves)
+//   +1 si MACD line  > Signal line         (-1 si al reves)
+//   +1 si cierre     > SMA200              (-1 si al reves)
+//   +1 si RSI > 55                         (-1 si RSI < 45, 0 entre medias)
+//   ESTADO  = signo del score (ALCISTA / BAJISTA / NEUTRAL)
+//   FUERZA  = |score|>=3 FUERTE, score==0 EQUILIBRIO, resto NORMAL
+//
+// SCORE GLOBAL: suma de los 12 scores unificados (rango teorico -48..+48).
+//   Semaforo VERDE  si scoreGlobal >=  umbral
+//   Semaforo ROJO   si scoreGlobal <= -umbral
+//   Semaforo AMBAR  en la zona intermedia
+//
+// ESTOCASTICO — codigos de ESTADO:
+//    2 CRUCE ALCISTA   -2 CRUCE BAJISTA    1 ALCISTA   -1 BAJISTA    0 NEUTRAL
+// ESTOCASTICO — codigos de FUERZA (prioridad de arriba a abajo):
+//    6 REBOTE DESDE VENTA     5 INICIO ALCISTA     -5 NACE BAJISTA
+//    4 VIGILAR BAJISTA       -4 VIGILAR ALCISTA     3 SOBRECOMPRA
+//   -3 SOBREVENTA            2 ALCISTA FUERTE      -2 BAJISTA FUERTE
+//    1 ALCISTA               -1 BAJISTA             0 NEUTRAL
+//
+// MACD — codigos de ESTADO:
+//    1 ALCISTA (hist>0)   -1 BAJISTA (hist<0)    0 NEUTRAL
+// MACD — codigos de FUERZA:
+//    3 IMPULSO ALCISTA SANO    1 PERDIENDO FUERZA
+//   -3 IMPULSO BAJISTA SANO   -1 RECUPERANDO FUERZA
+//    2 VIGILAR CRUCE ALCISTA  -2 VIGILAR CRUCE BAJISTA    0 NEUTRAL
+//
+// RESUMEN TACTICO (3 grupos):
+//   INTRADIA = 1m,3m,5m,15m,30m     pesos 0.50 / 0.75 / 1.00 / 1.25 / 1.50
+//   SWING    = 1H,2H,4H,Diario       pesos 1.00 / 1.25 / 1.50 / 2.00
+//   MACRO    = Semanal,Mensual,Anual pesos 1.50 / 2.00 / 2.50
+//   TENDENCIA por grupo: |score|<=umbralCero NEUTRAL; >=umbralFuerte ALCISTA/
+//   BAJISTA; intermedio POSIBLE ALCISTA / POSIBLE BAJISTA.
+//   MOTOR = marco MAS PEQUENO del grupo que ya empuja en la direccion.
+//   CONFIRMACION = que marcos MAYORES acompanan y cuales faltan.
+//
+// PREDICCION (tabla en esquina):
+//   - TF objetivo: selector (Auto / Intradia / Swing / Macro). Cambia el sesgo.
+//   - Objetivo: resistencia (si sube) o soporte (si baja); si no hay nivel,
+//     se usa cierre +/- atrMult*ATR.
+//   - Stop tecnico: el lado contrario (soporte para largos, resistencia cortos).
+//   - R:R = recorrido a favor / riesgo al stop, en formato "x : 1".
+//   - AVISO: orientativa, PUEDE FALLAR, no es recomendacion de inversion.
+//
+// FUNDAMENTALES (request.financial, SIEMPRE global):
+//   Ingresos (TOTAL_REVENUE), EBITDA, EBIT (OPER_INCOME), Neto (NET_INCOME),
+//   EPS (EARNINGS_PER_SHARE_BASIC). Columnas ULTIMO (FQ) / ANUAL (FY) /
+//   CREC. (FY vs FY-1). Mini-fila EBITDA 4T = suma de los ultimos 4 trimestres
+//   (proxy TTM). Si el simbolo no reporta fundamentales (forex, cripto, indices)
+//   las celdas muestran "n/d" gracias a f_money / f_num / f_growth + na global.
+//
+// CONFLUENCIA EJECUTIVA: resume la alineacion de los 3 grupos en una frase.
+//   Recordatorio de jerarquia: MACRO marca el sesgo de fondo, SWING lo confirma
+//   e INTRADIA aporta el gatillo fino de entrada.
+//
+// INSTITUCIONAL / FLUJO (el "Unusual Whales" nativo y gratis posible):
+//   A) INTERNOS via request.security(.., ignore_invalid_symbol = true):
+//        VIX  (TVC:VIX)   >20 miedo, <15 calma
+//        Put/Call total   (USI:PCC) y acciones (USI:PCCE) >1 miedo, <0.7 codicia
+//        Amplitud         (USI:ADD avances netos, USI:TRIN inverso, USI:TICK)
+//        Volumen U/D      (USI:UVOL/USI:DVOL ratio, USI:VOLD neto)
+//      Si la cuenta no tiene el simbolo -> na -> "n/d" (NUNCA rompe).
+//   B) HUELLA DE VOLUMEN nativa del simbolo (built-ins):
+//        RVOL = volume / sma(volume,20)  >1.5 anormal
+//        OBV  (ta.obv, variable) + pendiente
+//        Acum/Dist (ta.accdist, variable) + pendiente
+//        MFI  (ta.mfi(hlc3,14))  >80 sobrecompra, <20 sobreventa
+//        VWAP (ta.vwap)  precio encima/debajo
+//        CMF  (calculo manual 20 periodos)  >0 acumulacion, <0 distribucion
+//   C) COT (LibraryCOT v3) — posicionamiento institucional REAL:
+//        SOLO futuros/indices/materias/divisas. Acciones (NVDA) NO tienen COT.
+//        Patron seguro: convertRootToCOTCode("Auto") + str.length>0 ANTES de
+//        pedir. Comerciales (cobertura) vs No-comerciales (especuladores) neto
+//        + cambio. Sin COT -> "Sin COT (acciones no tienen)".
+//   LECTURA institucional: combina VIX + put/call + amplitud + vol U/D (RVOL
+//   amplifica) -> RIESGO-ON (apetito) / RIESGO-OFF (miedo/cobertura) / MIXTO.
+//   NOTA: Pine no puede leer options flow / dark pool / trades del Congreso
+//   (sandbox sin internet de entrada). Esto es el maximo nativo y gratis.
+//
+// EXPORT IA (JSON v2.2): incluye los 12 marcos, los 3 grupos tacticos, niveles,
+//   prediccion (con TF objetivo, objetivo, stop y R:R), el bloque fundamentales
+//   completo y el bloque institucional {vix,putCall,putCallEq,breadth,trin,
+//   volUD,rvol,mfi,cmf,vwapPos,hayCOT,cotComercial,cotEspec,lectura}. Numeros
+//   na -> null para que el JSON sea valido. Se envia con
+//   alert.freq_once_per_bar_close para no duplicar en intrabar.
+// =============================================================================
+
+// =============================================================================
+// 20) APENDICE OPERATIVO  (SOLO comentarios — guia de uso panel por panel)
+// -----------------------------------------------------------------------------
+// Esta seccion NO genera codigo ejecutable: documenta el flujo de trabajo, las
+// posiciones recomendadas y como leer cada panel en conjunto. Cero impacto en la
+// compilacion (Pine ignora todo lo que empieza por "//").
+//
+// 20.1) REPARTO DE PANELES POR ESQUINAS (recomendado, evita solapes):
+//   - MATRIZ (12 marcos)        -> Arriba derecha   (input "Posicion matriz")
+//   - FUNDAMENTALES             -> Arriba izquierda  (input "Posicion fundamentales")
+//   - INDICADORES EXTRA         -> Abajo izquierda   (input "Posicion extra")
+//   - RESUMEN TACTICO           -> Abajo derecha     (input "Posicion resumen")
+//   - PREDICCION                -> Centro derecha    (input "Posicion prediccion")
+//   - INSTITUCIONAL / FLUJO     -> Centro izquierda  (input "Posicion institucional")
+//   Cada panel tiene SU toggle (showMatriz, showFund, showExtra, showTact,
+//   showPred, showInst) para encender/apagar sin tocar el codigo. Si dos paneles
+//   comparten esquina, el ultimo creado tapa al anterior: cambia uno de sitio.
+//
+// 20.2) ORDEN DE LECTURA SUGERIDO (de fondo a gatillo):
+//   1. INSTITUCIONAL -> regimen del mercado (RIESGO-ON / RIESGO-OFF / MIXTO).
+//      Si es RIESGO-OFF, los largos pierden ventaja aunque la tecnica acompane.
+//   2. MATRIZ + TACTICO MACRO -> sesgo de fondo (semanal/mensual/anual).
+//   3. TACTICO SWING -> confirma o niega el sesgo de fondo en 1H-Diario.
+//   4. TACTICO INTRADIA + PREDICCION -> gatillo fino y objetivos/stop con R:R.
+//   5. FUNDAMENTALES -> filtro de calidad (ingresos/EBITDA/EPS crecientes).
+//
+// 20.3) COMO INTERPRETAR LA LECTURA INSTITUCIONAL:
+//   votoRiesgo suma 4 votos (VIX, Put/Call equities, Amplitud ADD, Vol U/D):
+//     +1 cada senal de apetito, -1 cada senal de miedo, 0 si neutral o "n/d".
+//   votoRiesgo >= +2 -> RIESGO-ON (apetito): el dinero entra, favorece largos.
+//   votoRiesgo <= -2 -> RIESGO-OFF (miedo/cobertura): el dinero se cubre.
+//   intermedio       -> MIXTO: sin regimen claro, reducir tamano.
+//   RVOL > 1.5 anade "| volumen anormal": el movimiento tiene conviccion real.
+//
+// 20.4) COT (Commitment of Traders) — que mirar:
+//   - COT comercial   = hedgers / productores: suelen ir CONTRA-tendencia en
+//     extremos (cobertura). Neto muy corto en techos, muy largo en suelos.
+//   - COT especulador = grandes fondos: suelen ir A FAVOR de la tendencia.
+//   - La columna muestra el NETO (Long-Short) y, entre parentesis, si esa
+//     semana subio o bajo respecto a la anterior (cambio de posicionamiento).
+//   - En ACCIONES no hay COT (no son contratos CFTC) -> "Sin COT" siempre.
+//
+// 20.5) AVISO LEGAL / EXPECTATIVAS:
+//   Este indicador es una herramienta de ANALISIS, no asesoramiento financiero.
+//   La prediccion por reglas es ORIENTATIVA y PUEDE FALLAR. El usuario decide y
+//   asume su riesgo. Los datos institucionales dependen de los simbolos que tu
+//   cuenta de TradingView tenga disponibles (algunos USI:* requieren suscripcion
+//   a datos; si faltan, el panel los marca "n/d" sin romper el indicador).
+// =============================================================================
