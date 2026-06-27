@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PineScope IA — analista con tu IA</title>
+<style>
+  :root{
+    --bg:#0E1117; --surface:#161B22; --card:#1B2230; --border:#2A3242;
+    --tx:#D1D4DC; --mut:#8A93A2; --acc:#5B8DEF;
+    --alc:#26A69A; --baj:#EF5350; --avi:#E0A800;
+    --r:10px; --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+    --sans:Inter,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);font-size:14px;line-height:1.5}
+  .wrap{max-width:920px;margin:0 auto;padding:22px 16px 60px}
+  h1{font-size:20px;margin:0 0 2px} .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:640px){.grid{grid-template-columns:1fr}}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 4px;text-transform:uppercase;letter-spacing:.04em}
+  input,select,textarea{width:100%;background:var(--card);border:1px solid var(--border);color:var(--tx);
+    border-radius:var(--r);padding:9px 11px;font-family:var(--sans);font-size:14px;outline:none}
+  input:focus,select:focus,textarea:focus{border-color:var(--acc)}
+  textarea{resize:vertical;font-family:var(--mono);font-size:12.5px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin:0 0 14px}
+  .row{margin:0 0 12px}
+  button{background:var(--acc);color:#fff;border:0;border-radius:var(--r);padding:11px 16px;font-weight:600;
+    font-size:14px;cursor:pointer;width:100%}
+  button:disabled{opacity:.55;cursor:default}
+  .hint{font-size:12px;color:var(--mut);margin-top:6px}
+  .out{white-space:pre-wrap;font-family:var(--sans);font-size:14px;line-height:1.6;min-height:60px}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.04em}
+  .b-alc{background:rgba(38,166,154,.16);color:var(--alc)} .b-baj{background:rgba(239,83,80,.16);color:var(--baj)}
+  .b-avi{background:rgba(224,168,0,.16);color:var(--avi)}
+  .err{color:var(--baj)} .muted{color:var(--mut)}
+  a{color:var(--acc)}
+  .flex{display:flex;gap:10px;align-items:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>PineScope IA</h1>
+  <p class="sub">Pega el JSON que exporta el indicador PineScope (desde la alerta de TradingView) y tu IA lo analiza. Tus claves se guardan solo en ESTE navegador (localStorage); nada se manda a ningun servidor mio.</p>
+
+  <div class="card">
+    <div class="grid">
+      <div class="row">
+        <label>Proveedor de IA</label>
+        <select id="prov"></select>
+      </div>
+      <div class="row">
+        <label>Modelo</label>
+        <input id="model" placeholder="modelo">
+      </div>
+    </div>
+    <div class="row" id="keyRow">
+      <label id="keyLbl">API key (se guarda en tu navegador)</label>
+      <input id="key" type="password" placeholder="pega tu API key">
+      <div class="hint" id="keyHint"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label>JSON del indicador (PineScope_Dashboard)</label>
+      <textarea id="json" rows="8" placeholder='Pega aqui el JSON, p.ej: {"app":"PineScope","symbol":"NVDA","price":194.23, ... }'></textarea>
+      <div class="hint">Como obtenerlo: en TradingView crea una alerta sobre PineScope_Dashboard con condicion "Any alert() function call"; cuando salte, el texto de la alerta es este JSON. Copialo y pegalo aqui. (No necesitas plan de pago para copiarlo del registro de alertas.)</div>
+    </div>
+    <div class="row">
+      <label>Instrucciones / estilo (opcional)</label>
+      <textarea id="style" rows="2" placeholder="Por defecto: analista tecnico de velas japonesas. Puedes pedir otro enfoque."></textarea>
+    </div>
+    <button id="go">Analizar con IA</button>
+  </div>
+
+  <div class="card">
+    <div class="flex" style="justify-content:space-between;margin-bottom:8px">
+      <label style="margin:0">Analisis</label>
+      <span id="status" class="muted"></span>
+    </div>
+    <div id="out" class="out muted">Aun no hay analisis.</div>
+  </div>
+
+  <p class="hint">Aviso: analisis educativo, puede fallar y NO es recomendacion de inversion. La IA solo lee los datos del indicador; no ve la imagen del grafico ni dibuja en TradingView.</p>
+</div>
+
+<script>
+// ------------------------------------------------------------------
+// Proveedores. Cada uno define modelo por defecto y como llamarlo.
+// ------------------------------------------------------------------
+const PROVIDERS = {
+  claude: { name: "Claude (Anthropic)", model: "claude-opus-4-8",
+    hint: "Crea la key en console.anthropic.com. Funciona desde el navegador. Puedes usar un modelo mas barato (claude-haiku-4-5)." },
+  openai: { name: "OpenAI (GPT)", model: "gpt-4o-mini",
+    hint: "Crea la key en platform.openai.com. Cambia el modelo si tu cuenta usa otro." },
+  gemini: { name: "Google Gemini", model: "gemini-2.5-flash",
+    hint: "Crea la key en aistudio.google.com. gemini-2.5-flash es gratis con limites." },
+  grok:   { name: "Grok (xAI)", model: "grok-2-latest",
+    hint: "Key en console.x.ai. Si el navegador lo bloquea (CORS), usa la version Python (pinescope_ia.py)." },
+  ollama: { name: "Ollama (local, gratis)", model: "qwen3.5:2b", local: true,
+    hint: "Corre en tu PC (ollama serve). Si el navegador lo bloquea, inicia Ollama con OLLAMA_ORIGINS=* o usa pinescope_ia.py. El campo de abajo es la URL, no una key." },
+};
+
+const $ = (id) => document.getElementById(id);
+const provSel = $("prov");
+for (const k in PROVIDERS) { const o = document.createElement("option"); o.value = k; o.textContent = PROVIDERS[k].name; provSel.appendChild(o); }
+
+function lsKey(p){ return "pinescope_ia_key_" + p; }
+function lsModel(p){ return "pinescope_ia_model_" + p; }
+
+function loadProvider(){
+  const p = provSel.value, cfg = PROVIDERS[p];
+  $("model").value = localStorage.getItem(lsModel(p)) || cfg.model;
+  $("key").value   = localStorage.getItem(lsKey(p)) || (cfg.local ? "http://localhost:11434" : "");
+  $("keyLbl").textContent = cfg.local ? "URL de Ollama (se guarda en tu navegador)" : "API key (se guarda en tu navegador)";
+  $("key").type = cfg.local ? "text" : "password";
+  $("keyHint").textContent = cfg.hint;
+}
+provSel.addEventListener("change", loadProvider);
+provSel.value = localStorage.getItem("pinescope_ia_prov") || "claude";
+loadProvider();
+
+// ------------------------------------------------------------------
+// Construye el prompt de analista a partir del JSON del indicador.
+// ------------------------------------------------------------------
+const SYSTEM = [
+"Eres un analista tecnico financiero experto en velas japonesas, con el metodo Tendencia + Nivel + Senal.",
+"Recibes datos NATIVOS y exactos de un indicador de TradingView (PineScope) con multiples temporalidades:",
+"tendencia por marco, estocastico (ESTADO/FUERZA), MACD (HIST/ESTADO/FUERZA), resumen intradia y swing, niveles de soporte/resistencia y una prediccion por reglas.",
+"Responde en ESPANOL, SIN EMOJIS, breve y accionable, con esta estructura exacta:",
+"1) VEREDICTO en una linea + el semaforo en texto entre corchetes: [VERDE], [AMBAR] o [ROJO].",
+"2) Multi-marco: combina intradia (timing del retroceso/rebote) y swing (direccion de fondo, que MANDA); cita el motor y la confirmacion reales.",
+"3) Momentum: 1-2 frases sobre estocastico y MACD (impulso, divergencias, sobrecompra/venta) usando los numeros reales.",
+"4) Niveles: soporte y resistencia con sus numeros; usa la prediccion por reglas como referencia.",
+"5) Plan y riesgo: entrada/invalidacion/objetivo con relacion riesgo-beneficio >= 2:1 y riesgo <= 2%.",
+"Si intradia y swing divergen, dilo y prioriza el swing. Nunca inventes niveles: usa solo los del JSON.",
+"Cierra con: 'Analisis educativo, puede fallar, no es recomendacion de inversion.'"
+].join(" ");
+
+function buildPrompt(data, style){
+  let s = "DATOS DEL ACTIVO (JSON de PineScope):\n```json\n" + JSON.stringify(data, null, 2) + "\n```\n\n";
+  s += "Analiza estos datos siguiendo tu estructura.";
+  if (style && style.trim()) s += "\n\nInstruccion extra del usuario: " + style.trim();
+  return s;
+}
+
+// ------------------------------------------------------------------
+// Llamadas a cada proveedor (fetch directo desde el navegador).
+// ------------------------------------------------------------------
+async function callClaude(key, model, sys, user){
+  const r = await fetch("https://api.anthropic.com/v1/messages", { method:"POST",
+    headers:{ "x-api-key":key, "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true", "content-type":"application/json" },
+    body: JSON.stringify({ model, max_tokens:1200, system:sys, messages:[{role:"user",content:user}] }) });
+  if(!r.ok) throw new Error("Claude "+r.status+": "+(await r.text()).slice(0,300));
+  const j = await r.json();
+  return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n").trim() || JSON.stringify(j).slice(0,400);
+}
+async function callOpenAILike(url, key, model, sys, user){
+  const r = await fetch(url, { method:"POST",
+    headers:{ "Authorization":"Bearer "+key, "content-type":"application/json" },
+    body: JSON.stringify({ model, messages:[{role:"system",content:sys},{role:"user",content:user}] }) });
+  if(!r.ok) throw new Error(r.status+": "+(await r.text()).slice(0,300));
+  const j = await r.json();
+  return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || "").trim() || JSON.stringify(j).slice(0,400);
+}
+async function callGemini(key, model, sys, user){
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent?key="+encodeURIComponent(key);
+  const r = await fetch(url, { method:"POST", headers:{ "content-type":"application/json" },
+    body: JSON.stringify({ systemInstruction:{parts:[{text:sys}]}, contents:[{parts:[{text:user}]}] }) });
+  if(!r.ok) throw new Error("Gemini "+r.status+": "+(await r.text()).slice(0,300));
+  const j = await r.json();
+  const c = j.candidates && j.candidates[0];
+  return (c && c.content && c.content.parts || []).map(p=>p.text||"").join("").trim() || JSON.stringify(j).slice(0,400);
+}
+async function callOllama(base, model, sys, user){
+  base = String(base||"http://localhost:11434").replace(/\/+$/,"");
+  const r = await fetch(base+"/api/generate", { method:"POST", headers:{ "content-type":"application/json" },
+    body: JSON.stringify({ model, prompt: sys+"\n\n"+user, stream:false, think:false, keep_alive:"30m",
+      options:{ temperature:0.4, num_predict:1024 } }) });
+  if(!r.ok) throw new Error("Ollama "+r.status+": "+(await r.text()).slice(0,300));
+  const j = await r.json();
+  if(j.response!=null) return String(j.response).trim();
+  throw new Error("Ollama sin respuesta");
+}
+
+async function run(){
+  const p = provSel.value, cfg = PROVIDERS[p];
+  const model = $("model").value.trim() || cfg.model;
+  const key = $("key").value.trim();
+  const styleTxt = $("style").value;
+  // guarda preferencias
+  localStorage.setItem("pinescope_ia_prov", p);
+  localStorage.setItem(lsModel(p), model);
+  if (key) localStorage.setItem(lsKey(p), key);
+  if (!cfg.local && !key){ $("out").innerHTML = '<span class="err">Falta la API key.</span>'; return; }
+
+  let data;
+  try { data = JSON.parse($("json").value.trim()); }
+  catch(e){ $("out").innerHTML = '<span class="err">El JSON no es valido. Copia el texto completo de la alerta.</span>'; return; }
+  if (data && data.secret) delete data.secret; // el secreto del webhook no se usa aqui
+
+  const user = buildPrompt(data, styleTxt);
+  $("go").disabled = true; $("status").textContent = "Pensando..."; $("out").textContent = "";
+  try{
+    let txt;
+    if (p==="claude") txt = await callClaude(key, model, SYSTEM, user);
+    else if (p==="openai") txt = await callOpenAILike("https://api.openai.com/v1/chat/completions", key, model, SYSTEM, user);
+    else if (p==="grok") txt = await callOpenAILike("https://api.x.ai/v1/chat/completions", key, model, SYSTEM, user);
+    else if (p==="gemini") txt = await callGemini(key, model, SYSTEM, user);
+    else txt = await callOllama(key, model, SYSTEM, user);
+    renderOut(txt);
+    $("status").textContent = PROVIDERS[p].name + " - " + model;
+  }catch(e){
+    $("out").innerHTML = '<span class="err">Error: '+String(e.message||e).replace(/</g,"&lt;")+'</span>'
+      + '<div class="hint">Si es un problema de CORS con Ollama o Grok, usa la version Python (tools/pinescope_ia.py).</div>';
+    $("status").textContent = "";
+  }finally{ $("go").disabled = false; }
+}
+
+function renderOut(txt){
+  const safe = txt.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+  const html = safe
+    .replace(/\[VERDE\]/g,'<span class="badge b-alc">VERDE</span>')
+    .replace(/\[AMBAR\]/g,'<span class="badge b-avi">AMBAR</span>')
+    .replace(/\[ROJO\]/g,'<span class="badge b-baj">ROJO</span>');
+  const o = $("out"); o.classList.remove("muted"); o.innerHTML = html;
+}
+
+$("go").addEventListener("click", run);
+</script>
+</body>
+</html>
