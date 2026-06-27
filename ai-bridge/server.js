@@ -143,8 +143,8 @@ Como leer estos datos:
 - Si intradia y swing divergen, dilo y prioriza el swing; el intradia solo da el timing del retroceso/rebote.
 - Niveles nativos: soporte SIEMPRE debajo del precio, resistencia SIEMPRE encima.
 
-Responde con un mensaje BREVE listo para Telegram (texto plano, sin markdown pesado; emojis sobrios y saltos de linea). Estructura EXACTA:
-- 1a linea: VEREDICTO en MAYUSCULAS (ej. "SWING BAJISTA, REBOTE INTRADIA FINO") con un emoji 🟢/🟡/🔴 coherente con el semaforo.
+Responde con un mensaje BREVE listo para Telegram (texto plano, sin markdown pesado, SIN EMOJIS, con saltos de linea). Estructura EXACTA:
+- 1a linea: VEREDICTO en MAYUSCULAS (ej. "SWING BAJISTA, REBOTE INTRADIA FINO") seguido del semaforo en texto entre corchetes: [VERDE], [AMBAR] o [ROJO], coherente con el calculado.
 - "Multi-marco:" 1-2 frases combinando intradia (timing) y swing (direccion), citando el motor y la confirmacion reales.
 - "Momentum:" 1 frase sobre estocastico/MACD (impulso, divergencias, sobrecompra/venta) usando los numeros reales.
 - "Niveles:" soporte y resistencia nativos con sus numeros; menciona la prediccion por reglas como referencia.
@@ -297,14 +297,14 @@ async function processAlert(alert) {
     const analisis = await callAI(prompt);
     const symbol = alert.symbol || alert.ticker || '';
     const tf = alert.chartTF || alert.timeframe || '';
-    const sem = alert.semaforo ? ({ VERDE: '🟢', AMARILLO: '🟡', ROJO: '🔴' }[alert.semaforo] || '') : '';
-    const cabecera = `📈 PineScope ${sem} — ${symbol}${tf ? ' (' + tf + ')' : ''}\n`;
+    const sem = alert.semaforo ? ({ VERDE: '[VERDE]', AMARILLO: '[AMBAR]', ROJO: '[ROJO]' }[alert.semaforo] || '') : '';
+    const cabecera = `PineScope ${sem} — ${symbol}${tf ? ' (' + tf + ')' : ''}\n`;
     await sendTelegram(cabecera + '\n' + analisis);
     console.log('[webhook] analisis enviado a Telegram para', symbol || '(sin simbolo)');
   } catch (e) {
     const msg = String((e && e.message) || e);
     console.error('[webhook] error:', msg);
-    try { await sendTelegram('⚠️ PineScope: no pude generar el analisis.\nMotivo: ' + msg.slice(0, 300)); }
+    try { await sendTelegram('PineScope (aviso): no pude generar el analisis.\nMotivo: ' + msg.slice(0, 300)); }
     catch (_e2) { /* si Telegram tambien falla, ya quedo en el log */ }
   }
 }

@@ -187,38 +187,38 @@ pintar(bool cond, bool sesgoAlc, bool valido, string txt) =>
         label.new(bar_index, ypos, txt + sufijo, style=est, color=col, textcolor=C_TEXTO, size=size.small)
 
 // --- Familia: Martillo / Martillo invertido (sesgo alcista, en fondo) ---
-pintar(esMartillo,    true, martilloValido, "Martillo ▲")
-pintar(esMartilloInv, true, martInvValido,  "Martillo inv. ▲")
+pintar(esMartillo,    true, martilloValido, "Martillo")
+pintar(esMartilloInv, true, martInvValido,  "Martillo inv.")
 
 // --- Familia: Estrella fugaz / Hombre colgado (sesgo bajista, en techo) ---
 //   La misma forma de pin: arriba (mecha superior) = estrella fugaz / hombre colgado.
 //   Distinguimos por la tendencia de fondo para el nombre.
-pintar(esFormaPinSup and not tendAlcista, false, fugazValida,   "Estrella fugaz ▼")
-pintar(esFormaPinSup and tendAlcista,     false, colgadoValido, "Hombre colgado ▼")
+pintar(esFormaPinSup and not tendAlcista, false, fugazValida,   "Estrella fugaz")
+pintar(esFormaPinSup and tendAlcista,     false, colgadoValido, "Hombre colgado")
 //   Pin con mecha inferior en techo de tendencia alcista = hombre colgado (forma de martillo arriba).
-pintar(esFormaPinInf and tendAlcista,     false, colgadoValido, "Hombre colgado ▼")
+pintar(esFormaPinInf and tendAlcista,     false, colgadoValido, "Hombre colgado")
 
 // --- Familia: Envolventes ---
-pintar(envAlcista, true,  envAlcValido, "Envolvente ▲")
-pintar(envBajista, false, envBajValido, "Envolvente ▼")
+pintar(envAlcista, true,  envAlcValido, "Envolvente alcista")
+pintar(envBajista, false, envBajValido, "Envolvente bajista")
 
 // --- Familia: Doji (aviso de indecision; ambar salvo confluencia clara de extremo) ---
 //   Doji en soporte tras caida -> sesgo alcista; en resistencia tras subida -> bajista.
 dojiAlc = esDoji and (enSoporte or (trasCaida and not tendAlcista))
 dojiBaj = esDoji and (enResistencia or (trasSubida and not tendBajista))
-pintar(dojiAlc and not dojiBaj, true,  dojiEnExtremo, "Doji ◇")
-pintar(dojiBaj and not dojiAlc, false, dojiEnExtremo, "Doji ◇")
+pintar(dojiAlc and not dojiBaj, true,  dojiEnExtremo, "Doji")
+pintar(dojiBaj and not dojiAlc, false, dojiEnExtremo, "Doji")
 //   Doji sin extremo (pura indecision): ambar neutro encima de la vela.
 if esDoji and not dojiAlc and not dojiBaj and not soloValidos
-    label.new(bar_index, high + atr * 0.5, "Doji ◇", style=label.style_label_down, color=C_NEUTRAL, textcolor=C_TEXTO, size=size.small)
+    label.new(bar_index, high + atr * 0.5, "Doji", style=label.style_label_down, color=C_NEUTRAL, textcolor=C_TEXTO, size=size.small)
 
 // --- Familia: Estrellas de 3 velas ---
-pintar(estManana, true,  manValido,   "Estrella manana ★▲")
-pintar(estTarde,  false, tardeValido, "Estrella tarde ★▼")
+pintar(estManana, true,  manValido,   "Estrella manana")
+pintar(estTarde,  false, tardeValido, "Estrella tarde")
 
 // --- Familia: Harami ---
-pintar(haramiAlc, true,  haramiAlcValido, "Harami ▲")
-pintar(haramiBaj, false, haramiBajValido, "Harami ▼")
+pintar(haramiAlc, true,  haramiAlcValido, "Harami alcista")
+pintar(haramiBaj, false, haramiBajValido, "Harami bajista")
 
 // ------------------------------ Panel resumen (Nivel) -------------------------------
 // Pequena tabla en barstate.islast con el contexto vigente (tendencia + S/R).

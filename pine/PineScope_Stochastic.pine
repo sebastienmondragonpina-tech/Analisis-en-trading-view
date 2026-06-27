@@ -185,7 +185,7 @@ cruceBajChart = ta.crossunder(kAct, dAct)
 plotshape(cruceAlcChart, "Cruce alcista", style=shape.triangleup,   location=location.bottom, color=colAlc, size=size.tiny)
 plotshape(cruceBajChart, "Cruce bajista", style=shape.triangledown, location=location.top,    color=colBaj, size=size.tiny)
 // Aviso visual cuando hay un cruce alcista naciendo desde sobreventa
-plotchar(cruceAlcChart and kAct < nivelOS, "Rebote desde venta", char="▲", location=location.bottom, color=colAviso, size=size.tiny)
+plotshape(cruceAlcChart and kAct < nivelOS, "Rebote desde venta", style=shape.triangleup, location=location.bottom, color=colAviso, size=size.tiny)
 
 // =====================================================================================
 //  DICCIONARIOS  CODIGO -> TEXTO / COLOR

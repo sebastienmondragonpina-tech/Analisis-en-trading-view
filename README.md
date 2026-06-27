@@ -43,7 +43,7 @@ y la lleva a un nivel profesional:
   (swing) y te dice, para cada grupo, la **tendencia**, el **motor** (el marco mas pequeno que
   inicia el movimiento), la **confirmacion** (que marcos mayores acompanan o faltan), un **score**
   numerico y una **lectura accionable**.
-- **Semaforo y veredicto:** un 🟢/🟡/🔴 que resume la fuerza global y avisa de sobrecompra/sobreventa.
+- **Semaforo y veredicto:** un // que resume la fuerza global y avisa de sobrecompra/sobreventa.
 - **Soportes y resistencias por pivotes**, niveles, y una **prediccion por reglas** (objetivo de
   subida y de bajada con ATR + niveles). Todo orientativo, **nunca** una recomendacion.
 - **Export de datos para IA:** el Dashboard puede emitir un **JSON v2.0** con TODO el estado
@@ -62,7 +62,7 @@ son paneles especializados que reproducen y mejoran los de la imagen.
 
 | Indicador | Archivo | Donde aparece | Que muestra |
 |---|---|---|---|
-| **Dashboard** (centro de mando) | `pine/PineScope_Dashboard.pine` | **Encima** del precio | Tabla **MATRIZ por marco** (TF / ESTADO / FUERZA de la tendencia unificada de los 9 marcos) · **resumen tactico INTRADIA y SWING** con las 6 columnas (MARCO · TENDENCIA · MOTOR · CONFIRMACION · SCORE · LECTURA) · **semaforo** 🟢/🟡/🔴 + veredicto · **soportes/resistencias** por pivotes · **prediccion por reglas** (objetivo sube/baja) · **export JSON v2.0 para IA**. |
+| **Dashboard** (centro de mando) | `pine/PineScope_Dashboard.pine` | **Encima** del precio | Tabla **MATRIZ por marco** (TF / ESTADO / FUERZA de la tendencia unificada de los 9 marcos) · **resumen tactico INTRADIA y SWING** con las 6 columnas (MARCO · TENDENCIA · MOTOR · CONFIRMACION · SCORE · LECTURA) · **semaforo** // + veredicto · **soportes/resistencias** por pivotes · **prediccion por reglas** (objetivo sube/baja) · **export JSON v2.0 para IA**. |
 | **Stochastic** (panel estocastico, "EstoB2") | `pine/PineScope_Stochastic.pine` | **Panel inferior** | %K / %D dibujados con zonas 20/80 · tabla **TF · ESTADO · FUERZA** de los 9 marcos, con el vocabulario de la imagen (`CRUCE ALCISTA/BAJISTA`, `REBOTE DESDE VENTA`, `INICIO ALCISTA`, `NACE BAJISTA`, `VIGILAR BAJISTA`, `SOBRECOMPRA/SOBREVENTA`...) · su propio resumen INTRADIA/SWING basado en el estocastico. |
 | **MACD** (panel de momentum, "MC") | `pine/PineScope_MACD.pine` | **Panel inferior** | Histograma MACD a **4 colores** (positivo/negativo × creciente/decreciente) + lineas MACD y senal · tabla **TF · HIST · ESTADO · FUERZA** de los 9 marcos (HIST = valor numerico del histograma) con el vocabulario de la imagen (`IMPULSO ALCISTA/BAJISTA SANO`, `PERDIENDO FUERZA`, `RECUPERANDO FUERZA`, `VIGILAR CRUCE ALCISTA/BAJISTA`) · su resumen INTRADIA/SWING basado en el MACD. |
 | **Patterns** (patrones de velas) | `pine/PineScope_Patterns.pine` | **Encima** del precio | Patrones de velas japonesas (martillo, envolvente, doji, estrellas, harami...) con **filtro de contexto** (Tendencia + Nivel): solo valida los patrones que concuerdan con la tendencia y el nivel de S/R; los aislados se atenuan. |
@@ -82,16 +82,16 @@ que PineScope Pro hace **solo** (nativo) de lo que necesita ayuda externa:
 
 | Capacidad | Estado | Quien lo hace |
 |---|---|---|
-| Indicadores RSI / MACD / EMA / SMA / ATR / Estocastico | **NATIVO** ✅ | Dashboard, Stochastic y MACD (calculo puro sobre OHLCV). |
-| Analisis de **9 marcos** a la vez (1m...Diario) | **NATIVO** ✅ | `request.security` con lookahead OFF en los tres indicadores de tablas. |
-| Tablas TF / ESTADO / FUERZA y resumen INTRADIA/SWING | **NATIVO** ✅ | Dashboard, Stochastic y MACD. |
-| Semaforo 🟢/🟡/🔴 + veredicto | **NATIVO** ✅ | Dashboard. |
-| Soportes/resistencias y prediccion por reglas | **NATIVO** ✅ | Dashboard (pivotes + ATR; orientativa, no es IA). |
-| Patrones de velas con filtro de contexto | **NATIVO** ✅ | Patterns. |
-| **Exportar todos los datos en un JSON v2.0** | **NATIVO** ✅ | Dashboard, via `alert()` (es solo el "puente de salida"). |
-| **Mandar esos datos a una IA y recibir un analisis escrito** | **NECESITA el bridge** 🔌 | Carpeta `ai-bridge/` (servidor externo: webhook → IA → Telegram). **Requiere plan de pago** de TradingView para usar webhooks. |
-| **Que la IA VEA el grafico como imagen (vision)** | **NECESITA la extension** 🖼️ | La extension de Chrome **FinScope** captura la imagen y se la da a una IA con vision. Es la **alternativa gratis**, sin webhooks ni servidores. |
-| **Que la IA redibuje/anote sobre TradingView** | **NO se puede** ❌ | Ninguna IA puede pintar sobre tu grafico de TradingView. Lo que se dibuja lo dibujan **los propios indicadores Pine** (tablas, lineas, etiquetas). |
+| Indicadores RSI / MACD / EMA / SMA / ATR / Estocastico | **NATIVO** | Dashboard, Stochastic y MACD (calculo puro sobre OHLCV). |
+| Analisis de **9 marcos** a la vez (1m...Diario) | **NATIVO** | `request.security` con lookahead OFF en los tres indicadores de tablas. |
+| Tablas TF / ESTADO / FUERZA y resumen INTRADIA/SWING | **NATIVO** | Dashboard, Stochastic y MACD. |
+| Semaforo // + veredicto | **NATIVO** | Dashboard. |
+| Soportes/resistencias y prediccion por reglas | **NATIVO** | Dashboard (pivotes + ATR; orientativa, no es IA). |
+| Patrones de velas con filtro de contexto | **NATIVO** | Patterns. |
+| **Exportar todos los datos en un JSON v2.0** | **NATIVO** | Dashboard, via `alert()` (es solo el "puente de salida"). |
+| **Mandar esos datos a una IA y recibir un analisis escrito** | **NECESITA el bridge** | Carpeta `ai-bridge/` (servidor externo: webhook → IA → Telegram). **Requiere plan de pago** de TradingView para usar webhooks. |
+| **Que la IA VEA el grafico como imagen (vision)** | **NECESITA la extension** | La extension de Chrome **FinScope** captura la imagen y se la da a una IA con vision. Es la **alternativa gratis**, sin webhooks ni servidores. |
+| **Que la IA redibuje/anote sobre TradingView** | **NO se puede** | Ninguna IA puede pintar sobre tu grafico de TradingView. Lo que se dibuja lo dibujan **los propios indicadores Pine** (tablas, lineas, etiquetas). |
 
 **Resumen:** todo el **calculo** (incluido el paquete de datos para la IA) es **nativo**. Lo unico
 que sale de TradingView es **mandar esos datos a la IA** (el `ai-bridge/`, de pago) o **darle la

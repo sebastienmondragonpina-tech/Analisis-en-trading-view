@@ -165,7 +165,7 @@ Stochastic, momentum MACD en MACD). Asi puedes comparar "que dice cada motor".
 
 Solo el **Dashboard** anade la capa de decision:
 
-- **Semaforo** 🟢/🟡/🔴 a partir del score global: verde si supera +umbral, rojo si baja de −umbral,
+- **Semaforo** (verde / ambar / rojo, mostrado como **celda de color**, sin emojis) a partir del score global: verde si supera +umbral, rojo si baja de −umbral,
   amarillo en medio. Acompanado de un **veredicto** (con matiz de sobrecompra/sobreventa por RSI).
 - **Soportes / Resistencias** por **pivotes** (swing highs/lows), respetando siempre la invariante
   *soporte < precio < resistencia*; se dibujan como lineas extendidas con su etiqueta de precio.
@@ -238,19 +238,19 @@ resultado es lo que te llega a Telegram.
 
 Para no vender humo, conviene ser claros sobre los limites reales:
 
-- ✅ **La IA recibe los datos NATIVOS exactos** (no pixeles). El Dashboard ya calculo tendencia,
+- **La IA recibe los datos NATIVOS exactos** (no pixeles). El Dashboard ya calculo tendencia,
   estocastico y MACD de los 9 marcos con precision; la IA no tiene que "adivinar mirando una foto".
   En la practica, esto suele dar un analisis **mas fiable** que partir de una imagen, porque los
   numeros son exactos y completos.
-- 🖼️ **"Ver la grafica" como imagen es cosa de la extension FinScope**, no de este puente. Si quieres
+- **"Ver la grafica" como imagen es cosa de la extension FinScope**, no de este puente. Si quieres
   que una IA **mire los pixeles** del grafico (como haria una persona), eso lo hace **FinScope**
   (`BMW/finscope/`), que captura la pantalla y se la da a una IA con vision. PineScope Pro + ai-bridge
   trabajan con **datos**, no con imagenes.
-- ❌ **La IA NO puede redibujar ni anotar sobre TradingView.** Ninguna IA pinta lineas, flechas o
+- **La IA NO puede redibujar ni anotar sobre TradingView.** Ninguna IA pinta lineas, flechas o
   etiquetas en tu grafico. **Todo lo que ves dibujado lo dibujan los propios indicadores Pine**
   (las tablas, los soportes/resistencias, las etiquetas de prediccion y de patrones). La IA solo
   devuelve **texto** (a Telegram); no toca el grafico.
-- 💳 **El puente con IA por webhook requiere plan de pago** de TradingView. La alternativa **gratis**
+- **El puente con IA por webhook requiere plan de pago** de TradingView. La alternativa **gratis**
   es FinScope (un clic, sin servidores), a cambio de que la IA trabaje con la **imagen** en vez de
   con los datos nativos.
 

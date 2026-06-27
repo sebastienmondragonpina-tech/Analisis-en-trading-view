@@ -16,8 +16,8 @@ Por tanto, la arquitectura **siempre** es la misma forma de embudo:
 
 ```
 Pine Script (indicador/estrategia)
-   └── alert() / alertcondition()  → dispara cuando se cumple tu condición
-        └── Webhook POST (JSON)  → a una URL pública tuya (HTTPS)
+   └── alert() / alertcondition() → dispara cuando se cumple tu condición
+        └── Webhook POST (JSON) → a una URL pública tuya (HTTPS)
              └── Tu servidor / función recibe el JSON
                   └── Llama a la IA (Claude / OpenAI / Gemini) con el contexto
                        └── Devuelve el análisis → Telegram / Discord / email / broker
@@ -188,9 +188,9 @@ Fuentes:
 
 ```
 TradingView alert (Pine)
-   → POST https://tu-dominio/tv-webhook   (vía Cloudflare Tunnel → tu PC/daemon)
+   → POST https://tu-dominio/tv-webhook (vía Cloudflare Tunnel → tu PC/daemon)
         → FastAPI/Flask dentro del daemon
-             → valida "key"  → 200 OK inmediato (<3 s)
+             → valida "key" → 200 OK inmediato (<3 s)
              → encola (queue) el payload
                   → worker en background:
                        → arma prompt con los valores del indicador (+ datos de tu daemon)
@@ -206,16 +206,16 @@ TradingView alert (Pine)
 ### 4.2 Esqueleto del endpoint (FastAPI + worker en hilo)
 
 ```python
-# tv_webhook.py  — se ejecuta dentro de tu daemon "Agente-de-finanzas"
+# tv_webhook.py — se ejecuta dentro de tu daemon "Agente-de-finanzas"
 import os, queue, threading
 from fastapi import FastAPI, Request, HTTPException
 import uvicorn
 
 # --- Reutiliza lo que YA tiene tu daemon ---
-# from agente_finanzas import telegram_send   # tu función existente
-# from agente_finanzas import get_extra_context  # opcional: precio Yahoo, etc.
+# from agente_finanzas import telegram_send # tu función existente
+# from agente_finanzas import get_extra_context # opcional: precio Yahoo, etc.
 
-WEBHOOK_KEY = os.environ["TV_WEBHOOK_KEY"]          # la "key" que pones en el JSON de la alerta
+WEBHOOK_KEY = os.environ["TV_WEBHOOK_KEY"] # la "key" que pones en el JSON de la alerta
 TV_IPS = {"52.89.214.238", "34.212.75.30", "54.218.53.128", "52.32.178.7"}
 
 app = FastAPI()
@@ -237,7 +237,7 @@ async def tv_webhook(request: Request):
     # NO llamamos al LLM aquí: el límite de 3 s de TradingView nos obliga a
     # responder ya y procesar en background.
     work_q.put(data)
-    return {"status": "ok"}        # 200 inmediato (<3 s)
+    return {"status": "ok"} # 200 inmediato (<3 s)
 
 
 def ask_ai(payload: dict) -> str:
@@ -247,17 +247,17 @@ def ask_ai(payload: dict) -> str:
     user = (
         f"Senal: {payload.get('signal')} en {payload.get('ticker')} "
         f"({payload.get('exchange')}, {payload.get('interval')})\n"
-        f"Precio: {payload.get('price')}  RSI: {payload.get('rsi')}  "
-        f"EMA rapida: {payload.get('ema_fast')}  EMA lenta: {payload.get('ema_slow')}\n"
+        f"Precio: {payload.get('price')} RSI: {payload.get('rsi')} "
+        f"EMA rapida: {payload.get('ema_fast')} EMA lenta: {payload.get('ema_slow')}\n"
         f"Comentario del script: {payload.get('comment')}"
-        # + get_extra_context(payload['ticker'])  # datos extra de tu daemon
+        # + get_extra_context(payload['ticker']) # datos extra de tu daemon
     )
 
     # --- Claude (Anthropic) ---
     from anthropic import Anthropic
-    client = Anthropic()  # usa ANTHROPIC_API_KEY del entorno
+    client = Anthropic() # usa ANTHROPIC_API_KEY del entorno
     msg = client.messages.create(
-        model="claude-sonnet-4-5",       # modelo a tu elección
+        model="claude-sonnet-4-5", # modelo a tu elección
         max_tokens=300,
         system=system,
         messages=[{"role": "user", "content": user}],
@@ -267,15 +267,15 @@ def ask_ai(payload: dict) -> str:
     # --- Alternativa OpenAI ---
     # from openai import OpenAI
     # r = OpenAI().chat.completions.create(
-    #     model="gpt-4.1-mini",
-    #     messages=[{"role":"system","content":system},
-    #               {"role":"user","content":user}])
+    # model="gpt-4.1-mini",
+    # messages=[{"role":"system","content":system},
+    # {"role":"user","content":user}])
     # return r.choices[0].message.content
 
     # --- Alternativa Gemini ---
     # from google import genai
     # r = genai.Client().models.generate_content(
-    #     model="gemini-2.5-flash", contents=f"{system}\n\n{user}")
+    # model="gemini-2.5-flash", contents=f"{system}\n\n{user}")
     # return r.text
 
 
@@ -284,9 +284,9 @@ def worker():
         payload = work_q.get()
         try:
             analysis = ask_ai(payload)
-            texto = (f"🔔 {payload.get('signal')} {payload.get('ticker')} "
+            texto = (f" {payload.get('signal')} {payload.get('ticker')} "
                      f"@ {payload.get('price')}\n\n{analysis}")
-            # telegram_send(texto)   # ← REUTILIZA tu envío a Telegram existente
+            # telegram_send(texto) # ← REUTILIZA tu envío a Telegram existente
             print(texto)
         except Exception as e:
             print("error procesando señal:", e)
@@ -297,7 +297,7 @@ def worker():
 def start_webhook_server():
     """Llama esto desde el arranque de tu daemon (en un hilo)."""
     threading.Thread(target=worker, daemon=True).start()
-    uvicorn.run(app, host="127.0.0.1", port=8000)   # Cloudflare Tunnel publica en 443
+    uvicorn.run(app, host="127.0.0.1", port=8000) # Cloudflare Tunnel publica en 443
 ```
 
 ### 4.3 Pasos concretos de integración

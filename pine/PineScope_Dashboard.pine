@@ -364,9 +364,8 @@ lectSwing = f_lecturaSwing(tendSwing, scoreSwingR)
 // 6) SEMAFORO + VEREDICTO + LECTURA EJECUTIVA  (SPEC 8)
 // =============================================================================
 semaforo = scoreGlobal >= threshSem ? "VERDE" : scoreGlobal <= -threshSem ? "ROJO" : "AMARILLO"
-// Emojis del semaforo: en Pine v6 NO existe el escape \u{...}; los caracteres
-// (fuera del BMP, p. ej. 🟢) deben ir LITERALES en el codigo fuente UTF-8.
-semEmoji = semaforo == "VERDE" ? "🟢" : semaforo == "ROJO" ? "🔴" : "🟡"
+// Sin emojis: el COLOR es la senal del semaforo. colSem tine la etiqueta de
+// prediccion y la fila SEM. de la matriz (verde / ambar / rojo).
 colSem   = semaforo == "VERDE" ? colAlc : semaforo == "ROJO" ? colBaj : colAviso
 
 // RSI del marco actual del grafico (para matiz sobrecompra/sobreventa del veredicto).
@@ -376,7 +375,7 @@ veredicto = domTrend == "BAJISTA" and rsiChart < 35 ? "TECNICO BAJISTA PERO SOBR
 
 trendDetail = nVal == 0 ? "Sin datos suficientes." : domTrend == "NEUTRAL" ? "Mixto: " + str.tostring(nAlc) + " alcista(s) vs " + str.tostring(nBaj) + " bajista(s) de " + str.tostring(nVal) + "." : domTrend + " en " + str.tostring(domCount) + "/" + str.tostring(nVal) + " marcos."
 
-lectEjec = semEmoji + " " + veredicto + " (score global " + str.tostring(scoreGlobal) + ", " + trendDetail + ")"
+lectEjec = veredicto + " (score global " + str.tostring(scoreGlobal) + ", " + trendDetail + ")"
 
 // =============================================================================
 // 7) SOPORTES / RESISTENCIAS POR PIVOTES  (SPEC 8, invariante S < precio < R)
@@ -424,12 +423,11 @@ objetivoSube = not na(resLevel) ? resLevel : close + atrMult * atrChart
 objetivoBaja = not na(supLevel) ? supLevel : close - atrMult * atrChart
 
 predDir   = domTrend == "ALCISTA" ? "PROBABLE SUBIDA" : domTrend == "BAJISTA" ? "PROBABLE BAJADA" : "LATERAL / INCIERTO"
-predArrow = domTrend == "ALCISTA" ? "▲" : domTrend == "BAJISTA" ? "▼" : "•"
 
 var label predLbl = na
 if barstate.islast and showPred
     label.delete(predLbl)
-    txtPred = semEmoji + " " + predArrow + " " + predDir + "\n" + "Veredicto: " + veredicto + "\n" + trendDetail + "\n" + "INTRADIA: " + tendIntra + " (" + str.tostring(scoreIntraR) + ") - " + lectIntra + "\n" + "SWING: " + tendSwing + " (" + str.tostring(scoreSwingR) + ") - " + lectSwing + "\n" + "Si sube -> " + str.tostring(objetivoSube, format.mintick) + "\n" + "Si baja -> " + str.tostring(objetivoBaja, format.mintick) + "\n" + "Orientativa: PUEDE FALLAR. No es recomendacion."
+    txtPred = "SEMAFORO " + semaforo + "  |  " + predDir + "\n" + "Veredicto: " + veredicto + "\n" + trendDetail + "\n" + "INTRADIA: " + tendIntra + " (" + str.tostring(scoreIntraR) + ") - " + lectIntra + "\n" + "SWING: " + tendSwing + " (" + str.tostring(scoreSwingR) + ") - " + lectSwing + "\n" + "Si sube -> " + str.tostring(objetivoSube, format.mintick) + "\n" + "Si baja -> " + str.tostring(objetivoBaja, format.mintick) + "\n" + "Orientativa: PUEDE FALLAR. No es recomendacion."
     predLbl := label.new(bar_index, high, txtPred, style = label.style_label_lower_right, textcolor = color.white, color = color.new(colSem, 12), size = size.normal)
 
 // =============================================================================
@@ -470,7 +468,7 @@ if showMatriz and barstate.islast
     f_filaMatriz(tblM, 9, "Diario", tD)
     // Fila semaforo.
     table.cell(tblM, 0, 10, "SEM.", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblM, 1, 10, semEmoji + " " + semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    table.cell(tblM, 1, 10, semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
     table.cell(tblM, 2, 10, str.tostring(domCount) + "/" + str.tostring(nVal), text_color = colTxt, text_size = size.small, bgcolor = color.new(colHead, 0))
 
 // =============================================================================

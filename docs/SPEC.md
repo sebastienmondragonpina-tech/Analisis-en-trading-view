@@ -93,7 +93,7 @@ Para cada grupo (intradía, swing):
   (Define un pequeño mapa de frases coherente; mantén el estilo de la imagen.)
 
 ## 8. Semáforo, Soportes/Resistencias, Predicción (en el Dashboard)
-- **Semáforo** 🟢/🟡/🔴 a partir del score global (suma de los 9 marcos): >=+threshold verde, <=-threshold rojo, resto amarillo.
+- **Semáforo** (verde / ámbar / rojo, como celda de color) a partir del score global (suma de los 9 marcos): >=+threshold verde, <=-threshold rojo, resto amarillo.
 - **S/R** por pivotes (ta.pivothigh/low), invariante soporte < precio < resistencia, dibujados con líneas extendidas + etiqueta de precio.
 - **Predicción por reglas** (sin IA): objetivoSube = precio + ATR×mult o la resistencia; objetivoBaja = precio - ATR×mult o el soporte. Etiqueta con aviso de que puede fallar.
 

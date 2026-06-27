@@ -185,7 +185,7 @@ Servicios con plan gratuito: **Render**, **Railway**, **Fly.io**, **Replit**, et
    los datos. Asegúrate de que el mensaje de la alerta use `{{strategy.order.alert_message}}` /
    el mensaje del `alert()` del indicador (según cómo lo dispares).
 
-> ⚠️ Para que una alerta de TradingView pueda enviar **webhooks** normalmente necesitas un **plan
+> Para que una alerta de TradingView pueda enviar **webhooks** normalmente necesitas un **plan
 > de pago** (Essential/Pro o superior). En el plan **gratuito** las alertas existen pero **no
 > mandan webhooks**. Si no quieres pagar, usa la **extensión FinScope** (ver punto 1): hace el
 > análisis gratis, con un clic, mientras miras el gráfico — la diferencia es que FinScope le da a

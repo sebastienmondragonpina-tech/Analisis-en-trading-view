@@ -15,7 +15,7 @@
   (como la propia **FinScope** del usuario) que lee el DOM y/o captura el gráfico con
   `chrome.tabs.captureVisibleTab` y lo manda a una **IA con visión**. Es el enfoque con menos piezas y
   cero servidores. ([MDN captureVisibleTab](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/captureVisibleTab))
-- ⚠️ **Aviso de modelo:** **Gemini 2.0 Flash fue descontinuado y se apagó el 1 de junio de 2026**. Hoy el
+- **Aviso de modelo:** **Gemini 2.0 Flash fue descontinuado y se apagó el 1 de junio de 2026**. Hoy el
   modelo gratuito con visión equivalente es **Gemini 2.5 Flash** (o 3 Flash). El README de FinScope todavía
   recomienda `gemini-2.0-flash`; hay que actualizarlo. ([Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing),
   [Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits))
@@ -26,10 +26,10 @@
 
 | Plan TradingView | Webhooks | Alertas por email | Nº alertas activas |
 |---|---|---|---|
-| **Free / Basic** | ❌ No | ✅ Sí | 1 (free) |
-| **Essential** | ✅ Sí | ✅ Sí | 20 |
-| **Plus** | ✅ Sí | ✅ Sí | 100 |
-| **Premium** | ✅ Sí | ✅ Sí | 400 |
+| **Free / Basic** | No | Sí | 1 (free) |
+| **Essential** | Sí | Sí | 20 |
+| **Plus** | Sí | Sí | 100 |
+| **Premium** | Sí | Sí | 400 |
 
 Fuentes: [TradingView Hub — webhooks requieren Plus o superior](https://www.tv-hub.org/guide/tradingview-alerts-setup),
 [Tickerly — qué plan elegir 2026](https://tickerly.net/best-tradingview-plan/),
@@ -61,21 +61,21 @@ pestaña de TradingView. Tiene dos formas de "leer" el gráfico:
 - **tradingview-chart-analyzer** — extensión Chrome que captura el gráfico de TradingView, lo manda (base64) a un webhook n8n y lo analiza con GPT-4o-mini de visión, con un disclaimer de riesgo. ([GitHub Shubeetheanalyst](https://github.com/Shubeetheanalyst/tradingview-chart-analyzer))
 
 **Pros**
-- ✅ **Cero plan de pago** de TradingView: no toca alertas ni webhooks; lee la página directamente.
-- ✅ **Cero servidor / cero hosting:** todo ocurre en el navegador del usuario.
-- ✅ **Recupera la visión:** si captura la imagen y usa un modelo de visión, "ve" velas, patrones y dibujos
+- **Cero plan de pago** de TradingView: no toca alertas ni webhooks; lee la página directamente.
+- **Cero servidor / cero hosting:** todo ocurre en el navegador del usuario.
+- **Recupera la visión:** si captura la imagen y usa un modelo de visión, "ve" velas, patrones y dibujos
   que Pine no puede leer.
-- ✅ **Es exactamente lo que el usuario ya tiene** (FinScope): la curva de aprendizaje es nula porque ya sabe
+- **Es exactamente lo que el usuario ya tiene** (FinScope): la curva de aprendizaje es nula porque ya sabe
   instalarla y configurar Gemini.
-- ✅ Funciona "bajo demanda" (cuando el usuario aprieta un botón) — ideal para alguien no técnico.
+- Funciona "bajo demanda" (cuando el usuario aprieta un botón) — ideal para alguien no técnico.
 
 **Cons / límites**
-- ⚠️ El gráfico de TradingView es un **`<canvas>`**: el DOM **no** da los valores píxel a píxel; por eso el
+- El gráfico de TradingView es un **`<canvas>`**: el DOM **no** da los valores píxel a píxel; por eso el
   scraping de texto se limita a la leyenda/cabecera y hay que apoyarse en datos externos (Yahoo) o en la
   **imagen**. Es justo el "Límite conocido" que el propio README de FinScope documenta.
-- ⚠️ Es **bajo demanda**, no automático 24/7: necesita que la pestaña esté abierta y, normalmente, un clic.
+- Es **bajo demanda**, no automático 24/7: necesita que la pestaña esté abierta y, normalmente, un clic.
   No sustituye a una alerta que dispara sola de madrugada.
-- ⚠️ El scraping del DOM puede romperse si TradingView cambia su maquetación.
+- El scraping del DOM puede romperse si TradingView cambia su maquetación.
 
 > **Veredicto (a): SÍ, es la opción más realista para "gratis"** para un usuario no técnico, porque elimina
 > por completo la necesidad de plan de pago, de servidores y de webhooks. Es el camino que FinScope ya recorre.
@@ -96,17 +96,17 @@ Fuentes: [ngrok vs cloudflared (DEV)](https://dev.to/aryan_shourie/secure-tunnel
 [TV connector — correr en PC local](https://tv-connector.gitbook.io/docs/setup/run-on-local-pc).
 
 **Pros**
-- ✅ El **túnel** sí es gratis (cloudflared incluso sin cuenta y sin caducidad; ngrok gratis con cuenta).
-- ✅ Sin coste de servidor en la nube.
+- El **túnel** sí es gratis (cloudflared incluso sin cuenta y sin caducidad; ngrok gratis con cuenta).
+- Sin coste de servidor en la nube.
 
 **Cons (decisivos para un no técnico)**
-- ❌ **NO resuelve el problema raíz:** los webhooks de TradingView **siguen exigiendo plan de pago**. El túnel
+- **NO resuelve el problema raíz:** los webhooks de TradingView **siguen exigiendo plan de pago**. El túnel
   solo te da la URL que recibe; si TradingView no te deja poner webhooks, esto no aplica. (Sirve para alertas
   *por email* reconvertidas a webhook, lo que añade aún más piezas.)
-- ❌ Exige instalar Python, escribir/copiar un servidor Flask, abrir terminal, dejar el PC encendido y
-  arrancar el túnel cada vez. La guía local se califica literalmente "💀💀 (muy difícil)".
+- Exige instalar Python, escribir/copiar un servidor Flask, abrir terminal, dejar el PC encendido y
+  arrancar el túnel cada vez. La guía local se califica literalmente " (muy difícil)".
   ([soranoo — getting started](https://github.com/soranoo/TradingView-Free-Webhook-Alerts/blob/main/docs/gettingstarted.md))
-- ❌ ngrok gratis cambia de URL y/o "se cae cada 8 horas" si no creas cuenta.
+- ngrok gratis cambia de URL y/o "se cae cada 8 horas" si no creas cuenta.
 
 > **Veredicto (b): NO apto para usuario no técnico.** El túnel es gratis, pero el cuello de botella (webhooks
 > de pago) y el montaje (Python + servidor + terminal) lo descartan. Es la vía de un perfil developer.
@@ -132,14 +132,14 @@ emergentes (popups)** de las alertas y **reenvía** ese texto a Telegram/Discord
 Esto es, en el fondo, **el mismo enfoque que (a)**: una extensión de navegador como puente.
 
 **Pros**
-- ✅ c.2 evita el plan de pago (intercepta en la página, no usa webhooks).
-- ✅ Telegram/Discord son canales que un no técnico ya conoce.
+- c.2 evita el plan de pago (intercepta en la página, no usa webhooks).
+- Telegram/Discord son canales que un no técnico ya conoce.
 
 **Cons**
-- ⚠️ c.1 vuelve a chocar con el muro del plan de pago.
-- ⚠️ Estos servicios mandan **texto** de la alerta, **no análisis de IA** ni la **imagen** del gráfico. Para
+- c.1 vuelve a chocar con el muro del plan de pago.
+- Estos servicios mandan **texto** de la alerta, **no análisis de IA** ni la **imagen** del gráfico. Para
   meter IA por en medio harías falta un paso más (un bot que reciba el mensaje y llame a un modelo).
-- ⚠️ La ruta "alerta por email gratis → servicio que lee el inbox → webhook → IA" (TV-Hub, AlgoWay,
+- La ruta "alerta por email gratis → servicio que lee el inbox → webhook → IA" (TV-Hub, AlgoWay,
   TradingView-Free-Webhook-Alerts) existe, pero **suma muchas piezas** y configurar el lector de correo /
   Apps Script no es trivial. ([TV-Hub](https://www.tv-hub.org/guide/tradingview-alerts-setup),
   [AlgoWay](https://algoway.trade/blog/tradingview-free-webhook-alerts.html),
@@ -175,16 +175,16 @@ Esa imagen (o su URL) se manda a un modelo de visión gratuito/barato para que l
   [Gemini Free Tier 2026](https://pecollective.com/tools/gemini-free-tier-guide/)).
 
 **Pros**
-- ✅ **Recupera la visión real** del gráfico: patrones de velas, líneas, formas — lo que Pine no puede leer.
-- ✅ El snapshot manual y la copia de imagen/enlace **funcionan en plan gratuito**.
-- ✅ El modelo de visión Flash es **gratis** (con cuota) y barato si se excede.
+- **Recupera la visión real** del gráfico: patrones de velas, líneas, formas — lo que Pine no puede leer.
+- El snapshot manual y la copia de imagen/enlace **funcionan en plan gratuito**.
+- El modelo de visión Flash es **gratis** (con cuota) y barato si se excede.
 
 **Cons**
-- ⚠️ La **automatización** del snapshot en cada alerta es de **pago** (Alertatron/CHART-IMG/plan TradingView).
+- La **automatización** del snapshot en cada alerta es de **pago** (Alertatron/CHART-IMG/plan TradingView).
   En gratis, alguien (o la extensión) tiene que disparar la captura.
-- ⚠️ Pegar enlaces/imágenes y llamar a una API a mano es engorroso para un no técnico **si no hay una
+- Pegar enlaces/imágenes y llamar a una API a mano es engorroso para un no técnico **si no hay una
   extensión que lo automatice**. → De nuevo todo apunta a empaquetarlo dentro de la extensión (a).
-- ⚠️ Mantener el nombre del modelo al día (ya no `gemini-2.0-flash`).
+- Mantener el nombre del modelo al día (ya no `gemini-2.0-flash`).
 
 > **Veredicto (d):** es la pieza que **da "ojos"** a la IA y encaja perfecto **dentro** de la extensión (a):
 > en vez de copiar la URL del snapshot a mano, la extensión captura el gráfico (`captureVisibleTab` o el
@@ -196,11 +196,11 @@ Esa imagen (o su URL) se manda a un modelo de visión gratuito/barato para que l
 
 | Vía | ¿Evita plan de pago TV? | ¿Aporta IA/visión? | ¿Sin servidor? | Dificultad (no técnico) |
 |---|---|---|---|---|
-| **(a) Extensión navegador (DOM + captura)** | ✅ Sí | ✅ Sí (con visión) | ✅ Sí | 🟢 Baja (ya usa FinScope) |
-| (b) Servidor local + ngrok/cloudflared | ❌ No (webhooks de pago) | Depende | ❌ No | 🔴 Alta |
-| (c.1) Webhook → Telegram/Discord | ❌ No (de pago) | ❌ Solo texto | ✅/❌ | 🟡 Media |
-| (c.2) Extensión que intercepta popup | ✅ Sí | ❌ Solo texto | ✅ Sí | 🟢 Baja |
-| **(d) Snapshot → modelo de visión** | ✅ Sí (manual) | ✅ Sí (visión) | ✅ Sí | 🟢 Baja **si va dentro de (a)** |
+| **(a) Extensión navegador (DOM + captura)** | Sí | Sí (con visión) | Sí | Baja (ya usa FinScope) |
+| (b) Servidor local + ngrok/cloudflared | No (webhooks de pago) | Depende | No | Alta |
+| (c.1) Webhook → Telegram/Discord | No (de pago) | Solo texto | / | Media |
+| (c.2) Extensión que intercepta popup | Sí | Solo texto | Sí | Baja |
+| **(d) Snapshot → modelo de visión** | Sí (manual) | Sí (visión) | Sí | Baja **si va dentro de (a)** |
 
 ---
 
@@ -241,7 +241,7 @@ de navegador, combinada con (d) la captura del gráfico hacia un modelo de visi�
 - tradingview-webhooks-bot (GitHub): https://github.com/maginso/tradingview-webhooks-bot
 - TV connector — correr en PC local: https://tv-connector.gitbook.io/docs/setup/run-on-local-pc
 - soranoo/TradingView-Free-Webhook-Alerts (vía email→webhook): https://github.com/soranoo/TradingView-Free-Webhook-Alerts
-- soranoo — getting started (dificultad local "💀💀"): https://github.com/soranoo/TradingView-Free-Webhook-Alerts/blob/main/docs/gettingstarted.md
+- soranoo — getting started (dificultad local ""): https://github.com/soranoo/TradingView-Free-Webhook-Alerts/blob/main/docs/gettingstarted.md
 - AlgoWay — webhook gratis vía email: https://algoway.trade/blog/tradingview-free-webhook-alerts.html
 - Profit Robots — extensión que intercepta popups → Telegram/Discord: https://profitrobots.com/Home/NotificationsTradingView
 - QuantNomad — TradingView → Telegram 100% free: https://quantnomad.com/how-to-connect-tradingview-alerts-to-telegram-bots-100-free/
