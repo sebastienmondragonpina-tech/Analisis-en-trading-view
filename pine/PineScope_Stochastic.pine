@@ -1,0 +1,484 @@
+//@version=6
+// =====================================================================================
+//  PineScope Pro — Estocastico ("Chris EstoB2 Master")  [version PROFESIONAL]
+//  Panel inferior (overlay=false). Replica/mejora el panel estocastico de la imagen:
+//   1) %K(14, suavizado 3) / %D(3) dibujados con zonas 20/80 (hline + fill) y cruces.
+//   2) Tabla multi-TF (9 marcos)  ->  columnas  TF · ESTADO · FUERZA  (SPEC seccion 4).
+//   3) Resumen tactico INTRADIA / SWING (6 col: MARCO·TENDENCIA·MOTOR·CONFIRMACION·
+//      SCORE·LECTURA) basado en el ESTOCASTICO (SPEC seccion 7).
+//  Reglas, vocabulario y colores EXACTOS segun docs/SPEC.md.
+// =====================================================================================
+indicator("PineScope Pro — Estocastico", shorttitle="PineScope EstoB2", overlay=false, max_lines_count=500, max_labels_count=500)
+
+// =====================================================================================
+//  ENTRADAS
+// =====================================================================================
+grpEsto   = "Estocastico"
+longK     = input.int(14, "Longitud %K (ta.stoch)", minval=1, group=grpEsto)
+suavK     = input.int(3,  "Suavizado %K (SMA)",     minval=1, group=grpEsto)
+longD     = input.int(3,  "Longitud %D (SMA de %K)", minval=1, group=grpEsto)
+nivelOB   = input.int(80, "Nivel sobrecompra",       minval=50, maxval=99, group=grpEsto)
+nivelOS   = input.int(20, "Nivel sobreventa",        minval=1,  maxval=50, group=grpEsto)
+
+grpTabla  = "Tablas"
+posMulti  = input.string("Arriba derecha", "Posicion tabla multi-TF", options=["Arriba derecha","Arriba izquierda","Abajo derecha","Abajo izquierda","Centro derecha"], group=grpTabla)
+posResum  = input.string("Abajo izquierda", "Posicion resumen INTRADIA/SWING", options=["Arriba derecha","Arriba izquierda","Abajo derecha","Abajo izquierda","Centro izquierda"], group=grpTabla)
+tamTexto  = input.string("Normal", "Tamano de texto", options=["Pequeno","Normal","Grande"], group=grpTabla)
+mostrarMulti = input.bool(true, "Mostrar tabla multi-TF", group=grpTabla)
+mostrarResum = input.bool(true, "Mostrar resumen INTRADIA/SWING", group=grpTabla)
+
+// =====================================================================================
+//  PALETA (SPEC seccion 10 — tema oscuro, legible, profesional)
+// =====================================================================================
+colAlc    = #26A69A                 // alcista
+colBaj    = #EF5350                 // bajista
+colAviso  = #E0A800                 // neutro / aviso / vigilar / cruce / sobre*
+colFondo  = #0E1117                 // fondo
+colCab    = #1b2230                 // cabecera
+colTxt    = #D1D4DC                 // texto
+colTxtTen = #8A93A2                 // texto tenue
+colFilaA  = color.new(#151b27, 0)   // fila alterna sutil
+colFilaB  = color.new(#0E1117, 0)
+
+// Tamano de texto de tablas
+txtSize = tamTexto == "Pequeno" ? size.tiny : tamTexto == "Grande" ? size.normal : size.small
+
+// Posicion de tabla a partir del string
+f_pos(s) =>
+    r = position.top_right              // default: "Arriba derecha"
+    if s == "Arriba izquierda"
+        r := position.top_left
+    else if s == "Abajo derecha"
+        r := position.bottom_right
+    else if s == "Abajo izquierda"
+        r := position.bottom_left
+    else if s == "Centro derecha"
+        r := position.middle_right
+    else if s == "Centro izquierda"
+        r := position.middle_left
+    r
+
+// =====================================================================================
+//  FUNCION DE SENALES POR MARCO (todo encapsulado para request.security)
+//  Devuelve una TUPLA con: %K, %D, ESTADO (codigo) y FUERZA (codigo).
+//  Se trabaja con CODIGOS enteros (no strings) para no arrastrar series de texto
+//  pesadas por el multi-TF; el texto/color se resuelve fuera con el codigo.
+//
+//  Codigos ESTADO:  0 NEUTRAL · 1 CRUCE ALCISTA · 2 CRUCE BAJISTA · 3 ALCISTA · 4 BAJISTA
+//  Codigos FUERZA:  0 ALCISTA · 1 BAJISTA · 2 ALCISTA FUERTE · 3 BAJISTA FUERTE
+//                   4 VIGILAR BAJISTA · 5 VIGILAR ALCISTA · 6 SOBRECOMPRA · 7 SOBREVENTA
+//                   8 REBOTE DESDE VENTA · 9 INICIO ALCISTA · 10 NACE BAJISTA
+// =====================================================================================
+f_senalEsto() =>
+    // %K = stoch suavizado por SMA(suavK); %D = SMA(%K, longD)  (SPEC seccion 3)
+    kCrudo = ta.stoch(close, high, low, longK)
+    k = ta.sma(kCrudo, suavK)
+    d = ta.sma(k, longD)
+
+    // Valores previos y pendientes
+    kPrev = k[1]
+    dPrev = d[1]
+    pendK = k - kPrev
+    pendD = d - dPrev
+
+    // Series de cruce calculadas UNA sola vez (evita re-instanciar ta.* y aplicar el
+    // operador de historial sobre el resultado de una llamada built-in dentro de security)
+    cAlc = ta.crossover(k, d)
+    cBaj = ta.crossunder(k, d)
+
+    // Cruces de ESTE cierre
+    cruceAlcAhora = cAlc
+    cruceBajAhora = cBaj
+
+    // Cruces recientes (<=2 barras) para la FUERZA
+    cruceAlcReciente = cAlc or cAlc[1]
+    cruceBajReciente = cBaj or cBaj[1]
+
+    // ---- ESTADO (SPEC seccion 4) ----
+    estadoCod = 0
+    if cruceAlcAhora
+        estadoCod := 1                  // CRUCE ALCISTA
+    else if cruceBajAhora
+        estadoCod := 2                  // CRUCE BAJISTA
+    else if k > d
+        estadoCod := 3                  // ALCISTA
+    else if k < d
+        estadoCod := 4                  // BAJISTA
+    else
+        estadoCod := 0                  // NEUTRAL (iguales)
+
+    // ---- FUERZA (prioridad de arriba a abajo, SPEC seccion 4) ----
+    distancia = math.abs(k - d)
+    fuerzaCod = k > d ? 0 : 1           // por defecto: ALCISTA / BAJISTA simple
+    if k < nivelOS and pendK > 0 and (cruceAlcAhora or cruceAlcReciente)
+        fuerzaCod := 8                  // 1. REBOTE DESDE VENTA
+    else if cruceAlcReciente
+        fuerzaCod := 9                  // 2. INICIO ALCISTA (cruce alcista <=2 barras)
+    else if cruceBajReciente
+        fuerzaCod := 10                 // 3. NACE BAJISTA (cruce bajista <=2 barras)
+    else if k > d and pendK < pendD
+        fuerzaCod := 4                  // 4. VIGILAR BAJISTA (distancia se cierra)
+    else if k < d and pendK > pendD
+        fuerzaCod := 5                  // 5. VIGILAR ALCISTA (distancia se cierra al alza)
+    else if k > nivelOB
+        fuerzaCod := 6                  // 6a. SOBRECOMPRA
+    else if k < nivelOS
+        fuerzaCod := 7                  // 6b. SOBREVENTA
+    else if distancia >= 15 and k > d
+        fuerzaCod := 2                  // 7a. ALCISTA FUERTE (separacion grande a favor)
+    else if distancia >= 15 and k < d
+        fuerzaCod := 3                  // 7b. BAJISTA FUERTE
+    else
+        fuerzaCod := k > d ? 0 : 1      // 8. ALCISTA / BAJISTA
+
+    [k, d, estadoCod, fuerzaCod]
+
+// =====================================================================================
+//  LECTURA DEL MARCO ACTUAL (para dibujar %K/%D y marcadores en el panel)
+// =====================================================================================
+// El ESTADO del marco actual no se usa (solo %K, %D y la FUERZA) -> se descarta con _.
+[kAct, dAct, _, fuerzaAct] = f_senalEsto()
+
+// =====================================================================================
+//  MULTI-TF — los 9 marcos del SPEC (orden fijo, seccion 2)
+//  request.security con lookahead OFF. Una sola llamada por marco -> tupla.
+// =====================================================================================
+// Etiquetas de los 9 marcos (orden fijo, SPEC seccion 2). Los tickerids reales van
+// literales en cada request.security de abajo (Pine exige 'simple string' constante alli).
+tfLbl = array.from("1m", "3m", "5m", "15m", "30m", "1H", "2H", "4H", "Diario")
+
+[k1,  d1,  e1,  f1]  = request.security(syminfo.tickerid, "1",   f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k2,  d2,  e2,  f2]  = request.security(syminfo.tickerid, "3",   f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k3,  d3,  e3,  f3]  = request.security(syminfo.tickerid, "5",   f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k4,  d4,  e4,  f4]  = request.security(syminfo.tickerid, "15",  f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k5,  d5,  e5,  f5]  = request.security(syminfo.tickerid, "30",  f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k6,  d6,  e6,  f6]  = request.security(syminfo.tickerid, "60",  f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k7,  d7,  e7,  f7]  = request.security(syminfo.tickerid, "120", f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k8,  d8,  e8,  f8]  = request.security(syminfo.tickerid, "240", f_senalEsto(), lookahead=barmerge.lookahead_off)
+[k9,  d9,  e9,  f9]  = request.security(syminfo.tickerid, "D",   f_senalEsto(), lookahead=barmerge.lookahead_off)
+
+// Empaquetado en arreglos para iterar al pintar las tablas (orden = SPEC seccion 2)
+kArr = array.from(k1, k2, k3, k4, k5, k6, k7, k8, k9)
+eArr = array.from(e1, e2, e3, e4, e5, e6, e7, e8, e9)
+fArr = array.from(f1, f2, f3, f4, f5, f6, f7, f8, f9)
+
+// =====================================================================================
+//  DIBUJO DEL ESTOCASTICO EN EL PANEL
+// =====================================================================================
+plot(kAct, "%K", color=#42BDA8, linewidth=2)
+plot(dAct, "%D", color=#E0A800, linewidth=1)
+
+// Zonas 20/80 con relleno suave
+lineaOB  = hline(nivelOB, "Sobrecompra", color=color.new(colBaj, 40), linestyle=hline.style_dashed)
+lineaOS  = hline(nivelOS, "Sobreventa",  color=color.new(colAlc, 40), linestyle=hline.style_dashed)
+hline(50, "Medio", color=color.new(colTxtTen, 70), linestyle=hline.style_dotted)
+fill(lineaOB, lineaOS, color=color.new(#1b2230, 88), title="Banda 20-80")
+// Tintes de extremos (refuerzo visual de sobrecompra/sobreventa)
+hTop = hline(100, display=display.none)
+hBot = hline(0,   display=display.none)
+fill(hTop, lineaOB, color=color.new(colBaj, 92), title="Zona sobrecompra")
+fill(hBot, lineaOS, color=color.new(colAlc, 92), title="Zona sobreventa")
+
+// Marcadores de cruces en el marco del grafico
+cruceAlcChart = ta.crossover(kAct, dAct)
+cruceBajChart = ta.crossunder(kAct, dAct)
+plotshape(cruceAlcChart, "Cruce alcista", style=shape.triangleup,   location=location.bottom, color=colAlc, size=size.tiny)
+plotshape(cruceBajChart, "Cruce bajista", style=shape.triangledown, location=location.top,    color=colBaj, size=size.tiny)
+// Aviso visual cuando hay un cruce alcista naciendo desde sobreventa
+plotchar(cruceAlcChart and kAct < nivelOS, "Rebote desde venta", char="▲", location=location.bottom, color=colAviso, size=size.tiny)
+
+// =====================================================================================
+//  DICCIONARIOS  CODIGO -> TEXTO / COLOR
+// =====================================================================================
+f_txtEstado(c) =>
+    c == 1 ? "CRUCE ALCISTA" : c == 2 ? "CRUCE BAJISTA" : c == 3 ? "ALCISTA" : c == 4 ? "BAJISTA" : "NEUTRAL"
+
+f_colEstado(c) =>
+    // alcista verde, bajista rojo, cruce/neutral ambar (cruce = transicion)
+    c == 3 ? colAlc : c == 4 ? colBaj : c == 0 ? colTxtTen : colAviso
+
+f_txtFuerza(c) =>
+    out = "ALCISTA"
+    if c == 1
+        out := "BAJISTA"
+    else if c == 2
+        out := "ALCISTA FUERTE"
+    else if c == 3
+        out := "BAJISTA FUERTE"
+    else if c == 4
+        out := "VIGILAR BAJISTA"
+    else if c == 5
+        out := "VIGILAR ALCISTA"
+    else if c == 6
+        out := "SOBRECOMPRA"
+    else if c == 7
+        out := "SOBREVENTA"
+    else if c == 8
+        out := "REBOTE DESDE VENTA"
+    else if c == 9
+        out := "INICIO ALCISTA"
+    else if c == 10
+        out := "NACE BAJISTA"
+    out
+
+f_colFuerza(c) =>
+    // alcista verde, bajista rojo, vigilar/sobre*/transicion ambar (SPEC seccion 4)
+    col = colAlc
+    if c == 1 or c == 3
+        col := colBaj                   // BAJISTA / BAJISTA FUERTE
+    else if c == 0 or c == 2 or c == 8 or c == 9
+        col := colAlc                   // ALCISTA / ALCISTA FUERTE / REBOTE / INICIO ALCISTA
+    else
+        col := colAviso                 // VIGILAR* / SOBRE* / NACE BAJISTA
+    col
+
+// Signo del marco para el resumen tactico:  +1 alcista, -1 bajista, 0 neutral.
+// Se deriva del ESTADO estocastico del marco (es lo que "manda" en este panel).
+f_signo(estadoCod) =>
+    estadoCod == 1 or estadoCod == 3 ? 1 : estadoCod == 2 or estadoCod == 4 ? -1 : 0
+
+// =====================================================================================
+//  RESUMEN TACTICO INTRADIA / SWING  (SPEC seccion 7, basado en ESTOCASTICO)
+//  Pesos sugeridos:  intradia {1m:.5,3m:.75,5m:1,15m:1.25,30m:1.5}
+//                    swing    {1H:1,2H:1.25,4H:1.5,Diario:2}
+// =====================================================================================
+// Signos por marco (+1 alcista / -1 bajista / 0 neutral) — una declaracion por linea (Pine v6)
+s1 = f_signo(e1)
+s2 = f_signo(e2)
+s3 = f_signo(e3)
+s4 = f_signo(e4)
+s5 = f_signo(e5)
+s6 = f_signo(e6)
+s7 = f_signo(e7)
+s8 = f_signo(e8)
+s9 = f_signo(e9)
+
+// SCORE ponderado por grupo
+scoreIntra = s1*0.5 + s2*0.75 + s3*1.0 + s4*1.25 + s5*1.5
+scoreSwing = s6*1.0 + s7*1.25 + s8*1.5 + s9*2.0
+scoreIntra := math.round(scoreIntra * 100) / 100
+scoreSwing := math.round(scoreSwing * 100) / 100
+
+// Umbrales para clasificar la TENDENCIA del grupo
+umbralIntra = 2.0
+umbralSwing = 2.5
+
+f_tendencia(score, umbral) =>
+    out = "NEUTRAL"
+    if score > umbral
+        out := "ALCISTA"
+    else if score > 0.25
+        out := "POSIBLE ALCISTA"
+    else if score < -umbral
+        out := "BAJISTA"
+    else if score < -0.25
+        out := "POSIBLE BAJISTA"
+    out
+
+f_colTendencia(t) =>
+    str.contains(t, "ALCISTA") ? colAlc : str.contains(t, "BAJISTA") ? colBaj : colTxtTen
+
+tendIntra = f_tendencia(scoreIntra, umbralIntra)
+tendSwing = f_tendencia(scoreSwing, umbralSwing)
+
+// signoTend: signo de la TENDENCIA del grupo (para MOTOR / CONFIRMACION)
+signoTendIntra = str.contains(tendIntra, "ALCISTA") ? 1 : str.contains(tendIntra, "BAJISTA") ? -1 : 0
+signoTendSwing = str.contains(tendSwing, "ALCISTA") ? 1 : str.contains(tendSwing, "BAJISTA") ? -1 : 0
+
+// MOTOR — marco MAS PEQUENO del grupo cuyo signo coincide con el de la tendencia.
+// Texto: "<marco> manda arriba" (alcista) / "<marco> manda abajo" (bajista).
+f_motorIntra(sg) =>
+    etiqueta = "—"
+    if sg != 0
+        if s1 == sg
+            etiqueta := "1m"
+        else if s2 == sg
+            etiqueta := "3m"
+        else if s3 == sg
+            etiqueta := "5m"
+        else if s4 == sg
+            etiqueta := "15m"
+        else if s5 == sg
+            etiqueta := "30m"
+    etiqueta
+
+f_motorSwing(sg) =>
+    etiqueta = "—"
+    if sg != 0
+        if s6 == sg
+            etiqueta := "1H"
+        else if s7 == sg
+            etiqueta := "2H"
+        else if s8 == sg
+            etiqueta := "4H"
+        else if s9 == sg
+            etiqueta := "Diario"
+    etiqueta
+
+motorIntraTf = f_motorIntra(signoTendIntra)
+motorSwingTf = f_motorSwing(signoTendSwing)
+verboIntra   = signoTendIntra > 0 ? "arriba" : signoTendIntra < 0 ? "abajo" : ""
+verboSwing   = signoTendSwing > 0 ? "arriba" : signoTendSwing < 0 ? "abajo" : ""
+motorIntraTxt = motorIntraTf == "—" ? "sin motor claro" : motorIntraTf + " manda " + verboIntra
+motorSwingTxt = motorSwingTf == "—" ? "sin motor claro" : motorSwingTf + " manda " + verboSwing
+
+// CONFIRMACION — marcos MAYORES del grupo que confirman o faltan respecto a la tendencia.
+// Se recorre del MENOR al MAYOR por encima del motor (orden ascendente, como la imagen:
+// "15m/30m confirma caida", no "30m/15m").
+f_confIntra(sg, motorTf) =>
+    confirman = ""
+    faltan = ""
+    if sg != 0
+        // 15m (si el motor es menor o no hay motor claro)
+        if motorTf == "1m" or motorTf == "3m" or motorTf == "5m" or motorTf == "—"
+            if s4 == sg
+                confirman := confirman + (confirman == "" ? "" : "/") + "15m"
+            else
+                faltan := faltan + (faltan == "" ? "" : "/") + "15m"
+        // 30m
+        if motorTf == "1m" or motorTf == "3m" or motorTf == "5m" or motorTf == "15m" or motorTf == "—"
+            if s5 == sg
+                confirman := confirman + (confirman == "" ? "" : "/") + "30m"
+            else
+                faltan := faltan + (faltan == "" ? "" : "/") + "30m"
+    [confirman, faltan]
+
+f_confSwing(sg, motorTf) =>
+    confirman = ""
+    faltan = ""
+    if sg != 0
+        // 2H (orden ascendente)
+        if motorTf == "1H" or motorTf == "2H" or motorTf == "—"
+            if s7 == sg
+                confirman := confirman + (confirman == "" ? "" : "/") + "2H"
+            else
+                faltan := faltan + (faltan == "" ? "" : "/") + "2H"
+        // 4H
+        if motorTf == "1H" or motorTf == "2H" or motorTf == "4H" or motorTf == "—"
+            if s8 == sg
+                confirman := confirman + (confirman == "" ? "" : "/") + "4H"
+            else
+                faltan := faltan + (faltan == "" ? "" : "/") + "4H"
+    [confirman, faltan]
+
+[confIntraOk, confIntraFalta] = f_confIntra(signoTendIntra, motorIntraTf)
+[confSwingOk, confSwingFalta] = f_confSwing(signoTendSwing, motorSwingTf)
+
+// Texto de confirmacion para INTRADIA
+f_textoConfIntra(sg, ok, falta) =>
+    accion = sg > 0 ? "subida" : "caida"
+    partes = ""
+    if ok != ""
+        partes := ok + " confirma " + accion
+    if falta != ""
+        partes := partes + (partes == "" ? "" : " | ") + "falta " + falta
+    partes == "" ? "sin confirmacion mayor" : partes
+
+// Texto de confirmacion para SWING (anade estado del Diario "a favor"/"en contra")
+f_textoConfSwing(sg, ok, falta) =>
+    accion = sg > 0 ? "subida" : "caida"
+    partes = ""
+    if ok != ""
+        partes := ok + " confirma " + accion
+    if falta != ""
+        partes := partes + (partes == "" ? "" : " | ") + "falta " + falta
+    diarioFavor = sg != 0 and s9 == sg
+    diarioContra = sg != 0 and s9 == -sg
+    sufijoDiario = diarioFavor ? "Diario a favor" : diarioContra ? "Diario en contra" : "Diario neutro"
+    base = partes == "" ? "sin confirmacion mayor" : partes
+    base + " | " + sufijoDiario
+
+confIntraTxt = signoTendIntra == 0 ? "sin direccion definida" : f_textoConfIntra(signoTendIntra, confIntraOk, confIntraFalta)
+confSwingTxt = signoTendSwing == 0 ? "sin direccion definida" : f_textoConfSwing(signoTendSwing, confSwingOk, confSwingFalta)
+
+// LECTURA — frase accionable derivada de (tendencia, score) basada en estocastico
+f_lecturaIntra(tend) =>
+    out = "Sin sesgo intradia claro"
+    if tend == "ALCISTA"
+        out := "Largos intradia con momento estocastico"
+    else if tend == "POSIBLE ALCISTA"
+        out := "Buscar largos finos 1m/3m"
+    else if tend == "BAJISTA"
+        out := "Buscar cortos finos 1m/3m"
+    else if tend == "POSIBLE BAJISTA"
+        out := "Esperar fin de caida / cortos finos"
+    out
+
+f_lecturaSwing(tend) =>
+    out = "Sin sesgo swing claro"
+    if tend == "ALCISTA"
+        out := "Swing alcista confirmado"
+    else if tend == "POSIBLE ALCISTA"
+        out := "Swing alcista en desarrollo"
+    else if tend == "BAJISTA"
+        out := "Swing bajista — proteger / cortos"
+    else if tend == "POSIBLE BAJISTA"
+        out := "Swing bajista en desarrollo"
+    out
+
+lecturaIntra = f_lecturaIntra(tendIntra)
+lecturaSwing = f_lecturaSwing(tendSwing)
+
+// =====================================================================================
+//  TABLAS — se crean UNA vez (var) y se rellenan SOLO en barstate.islast
+// =====================================================================================
+var table tblMulti = table.new(f_pos(posMulti), 3, 10, bgcolor=colFondo, frame_color=colCab, frame_width=1, border_color=colCab, border_width=1)
+var table tblResum = table.new(f_pos(posResum), 6, 4, bgcolor=colFondo, frame_color=colCab, frame_width=1, border_color=colCab, border_width=1)
+
+// Celda de cabecera
+f_celdaCab(tbl, col, fila, txt) =>
+    table.cell(tbl, col, fila, txt, text_color=colTxt, text_size=txtSize, bgcolor=colCab, text_halign=text.align_center)
+
+if barstate.islast
+    // ----------------------- TABLA MULTI-TF  (TF · ESTADO · FUERZA) -------------------
+    if mostrarMulti
+        // Titulo (fila 0, fusionado visualmente via cabeceras)
+        f_celdaCab(tblMulti, 0, 0, "TF")
+        f_celdaCab(tblMulti, 1, 0, "ESTADO")
+        f_celdaCab(tblMulti, 2, 0, "FUERZA")
+        for i = 0 to 8
+            fila      = i + 1
+            etiqueta  = array.get(tfLbl, i)
+            codEstado = array.get(eArr, i)
+            codFuerza = array.get(fArr, i)
+            valK      = array.get(kArr, i)
+            bgFila    = (i % 2 == 0) ? colFilaA : colFilaB
+            // TF + valor %K tenue como referencia
+            table.cell(tblMulti, 0, fila, etiqueta, text_color=colTxt, text_size=txtSize, bgcolor=bgFila, text_halign=text.align_left)
+            table.cell(tblMulti, 1, fila, f_txtEstado(codEstado), text_color=f_colEstado(codEstado), text_size=txtSize, bgcolor=color.new(f_colEstado(codEstado), 86), text_halign=text.align_center)
+            table.cell(tblMulti, 2, fila, f_txtFuerza(codFuerza), text_color=f_colFuerza(codFuerza), text_size=txtSize, bgcolor=color.new(f_colFuerza(codFuerza), 86), text_halign=text.align_center)
+            // tooltip con %K para el detalle
+            table.cell_set_tooltip(tblMulti, 0, fila, "%K = " + str.tostring(valK, "#.0"))
+
+    // ---------------- RESUMEN TACTICO  (6 columnas, INTRADIA / SWING) -----------------
+    if mostrarResum
+        f_celdaCab(tblResum, 0, 0, "MARCO")
+        f_celdaCab(tblResum, 1, 0, "TENDENCIA")
+        f_celdaCab(tblResum, 2, 0, "MOTOR")
+        f_celdaCab(tblResum, 3, 0, "CONFIRMACION")
+        f_celdaCab(tblResum, 4, 0, "SCORE")
+        f_celdaCab(tblResum, 5, 0, "LECTURA")
+
+        // Fila INTRADIA
+        table.cell(tblResum, 0, 1, "INTRADIA", text_color=colTxt, text_size=txtSize, bgcolor=colFilaA, text_halign=text.align_left)
+        table.cell(tblResum, 1, 1, tendIntra, text_color=f_colTendencia(tendIntra), text_size=txtSize, bgcolor=color.new(f_colTendencia(tendIntra), 86), text_halign=text.align_center)
+        table.cell(tblResum, 2, 1, motorIntraTxt, text_color=colTxt, text_size=txtSize, bgcolor=colFilaA, text_halign=text.align_left)
+        table.cell(tblResum, 3, 1, confIntraTxt, text_color=colTxtTen, text_size=txtSize, bgcolor=colFilaA, text_halign=text.align_left)
+        table.cell(tblResum, 4, 1, str.tostring(scoreIntra, "#.##"), text_color=scoreIntra >= 0 ? colAlc : colBaj, text_size=txtSize, bgcolor=colFilaA, text_halign=text.align_center)
+        table.cell(tblResum, 5, 1, lecturaIntra, text_color=colTxt, text_size=txtSize, bgcolor=colFilaA, text_halign=text.align_left)
+
+        // Fila SWING
+        table.cell(tblResum, 0, 2, "SWING", text_color=colTxt, text_size=txtSize, bgcolor=colFilaB, text_halign=text.align_left)
+        table.cell(tblResum, 1, 2, tendSwing, text_color=f_colTendencia(tendSwing), text_size=txtSize, bgcolor=color.new(f_colTendencia(tendSwing), 86), text_halign=text.align_center)
+        table.cell(tblResum, 2, 2, motorSwingTxt, text_color=colTxt, text_size=txtSize, bgcolor=colFilaB, text_halign=text.align_left)
+        table.cell(tblResum, 3, 2, confSwingTxt, text_color=colTxtTen, text_size=txtSize, bgcolor=colFilaB, text_halign=text.align_left)
+        table.cell(tblResum, 4, 2, str.tostring(scoreSwing, "#.##"), text_color=scoreSwing >= 0 ? colAlc : colBaj, text_size=txtSize, bgcolor=colFilaB, text_halign=text.align_center)
+        table.cell(tblResum, 5, 2, lecturaSwing, text_color=colTxt, text_size=txtSize, bgcolor=colFilaB, text_halign=text.align_left)
+
+        // Pie con marco actual del grafico (contexto)
+        table.cell(tblResum, 0, 3, "Marco", text_color=colTxtTen, text_size=size.tiny, bgcolor=colFondo, text_halign=text.align_left)
+        table.cell(tblResum, 1, 3, timeframe.period, text_color=colTxtTen, text_size=size.tiny, bgcolor=colFondo, text_halign=text.align_center)
+        table.cell(tblResum, 2, 3, "%K " + str.tostring(kAct, "#.0"), text_color=colTxtTen, text_size=size.tiny, bgcolor=colFondo, text_halign=text.align_left)
+        table.cell(tblResum, 3, 3, f_txtFuerza(fuerzaAct), text_color=f_colFuerza(fuerzaAct), text_size=size.tiny, bgcolor=colFondo, text_halign=text.align_left)
+        table.cell(tblResum, 4, 3, "", bgcolor=colFondo)
+        table.cell(tblResum, 5, 3, "PineScope Pro · EstoB2", text_color=colTxtTen, text_size=size.tiny, bgcolor=colFondo, text_halign=text.align_right)

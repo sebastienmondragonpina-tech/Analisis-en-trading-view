@@ -1,0 +1,557 @@
+//@version=6
+// =============================================================================
+// PineScope Pro — DASHBOARD (CENTRO DE MANDO)  ·  Pine Script v6 NATIVO
+// -----------------------------------------------------------------------------
+// Version PROFESIONAL del dashboard de la imagen de referencia (paneles
+// "Chris EstoB2 Master" estocastico y "Chris IA MC Master" MACD), reescrito
+// 100% NATIVO sobre OHLCV de TradingView. Cumple el contrato docs/SPEC.md
+// (secciones 2,3,6,7,8,9,10) y es coherente con FinScope (analysis.js /
+// indicators.js): RSI Wilder, MACD via EMA, ATR Wilder, S/R por pivotes con
+// la invariante soporte < precio < resistencia.
+//
+// RECORDATORIO DURO: Pine NO llama a internet, NI a una IA, NI captura imagen.
+// Todo se CALCULA sobre OHLCV + request.security (multi-TF) con lookahead OFF.
+// La IA se conecta POR FUERA: este indicador EXPORTA un JSON v2.0 completo via
+// alert(); un servidor externo (ai-bridge/) lo recibe por webhook y lo manda a
+// la IA. Este archivo es solo el puente, no IA local.
+//
+// 9 MARCOS (orden fijo):  1m,3m,5m,15m,30m,1H,2H,4H,Diario
+//   en Pine:              "1","3","5","15","30","60","120","240","D"
+//   Grupo INTRADIA = {1m,3m,5m,15m,30m}   Grupo SWING = {1H,2H,4H,Diario}
+// =============================================================================
+
+indicator("PineScope Pro — Dashboard", shorttitle = "PineScope", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// =============================================================================
+// 0) PALETA (SPEC seccion 10 — tema oscuro, legible, profesional)
+// =============================================================================
+colAlc   = #26A69A   // alcista (verde)
+colBaj   = #EF5350   // bajista (rojo)
+colAviso = #E0A800   // neutro / aviso (ambar)
+colFondo = #0E1117   // fondo tablas
+colHead  = #1B2230   // cabecera
+colTxt   = #D1D4DC   // texto
+colTxtT  = #8A93A2   // texto tenue
+colFila  = #141A24   // fila alterna sutil
+colBorde = #2A3242   // bordes
+
+// =============================================================================
+// 1) INPUTS  (on/off, posiciones, longitudes, umbrales, IA)
+// =============================================================================
+grpInd = "Indicadores base"
+lenEmaF   = input.int(12,  "EMA rapida",   minval = 1, group = grpInd)
+lenEmaS   = input.int(26,  "EMA lenta",    minval = 1, group = grpInd)
+lenSma    = input.int(200, "SMA larga (estructura)", minval = 5, group = grpInd)
+lenRSI    = input.int(14,  "RSI",          minval = 2, group = grpInd)
+macdFast  = input.int(12,  "MACD rapida",  minval = 1, group = grpInd)
+macdSlow  = input.int(26,  "MACD lenta",   minval = 1, group = grpInd)
+macdSig   = input.int(9,   "MACD senal",   minval = 1, group = grpInd)
+lenStoch  = input.int(14,  "Estocastico (periodo)", minval = 1, group = grpInd)
+smoothK   = input.int(3,   "Estocastico suavizado %K", minval = 1, group = grpInd)
+smoothD   = input.int(3,   "Estocastico %D (SMA de %K)", minval = 1, group = grpInd)
+lenATR    = input.int(14,  "ATR",          minval = 2, group = grpInd)
+
+grpMatriz = "Tabla MATRIZ (TF / ESTADO / FUERZA)"
+showMatriz = input.bool(true, "Mostrar matriz por marco", group = grpMatriz)
+posMatriz  = input.string("Arriba derecha", "Posicion matriz", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha"], group = grpMatriz)
+
+grpTact = "Resumen TACTICO (INTRADIA / SWING)"
+showTact = input.bool(true, "Mostrar resumen tactico", group = grpTact)
+posTact  = input.string("Abajo derecha", "Posicion resumen", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha"], group = grpTact)
+umbralFuerte = input.float(3.0, "Umbral tendencia FUERTE (|score|)", minval = 0.5, step = 0.25, group = grpTact)
+umbralCero   = input.float(0.5, "Umbral zona NEUTRAL (|score|)", minval = 0.0, step = 0.25, group = grpTact)
+
+grpSem = "Semaforo"
+showSem   = input.bool(true, "Mostrar semaforo / veredicto", group = grpSem)
+threshSem = input.int(3, "Umbral semaforo (|score global|)", minval = 1, group = grpSem)
+
+grpSR = "Soportes / Resistencias (pivotes)"
+showSR   = input.bool(true, "Dibujar soporte / resistencia", group = grpSR)
+pivLeft  = input.int(10, "Sensibilidad pivote izquierda", minval = 1, group = grpSR)
+pivRight = input.int(10, "Sensibilidad pivote derecha",   minval = 1, group = grpSR)
+
+grpPred = "Prediccion por reglas"
+showPred = input.bool(true, "Mostrar etiqueta de prediccion", group = grpPred)
+atrMult  = input.float(1.5, "Multiplo de ATR para el objetivo", minval = 0.1, step = 0.1, group = grpPred)
+
+grpPlot = "Plots de contexto"
+showEmas = input.bool(true, "Plotear EMAs y SMA200", group = grpPlot)
+
+grpAI = "EXPORT IA (webhook)"
+emitAI  = input.bool(false, "Emitir IA (webhook)", group = grpAI)
+secretAI = input.string("PON_TU_SECRETO", "Secreto webhook", group = grpAI)
+
+// =============================================================================
+// 2) MOTOR DE SENALES POR MARCO  (SPEC 3,4,5,6)
+// -----------------------------------------------------------------------------
+// UNA sola funcion encapsula TODAS las senales del marco y devuelve una TUPLA.
+// Esa llamada se pasa como 'expr' de request.security (lookahead OFF). NUNCA se
+// llama request.security dentro de bucles con series de TF dinamicas.
+//
+// Devuelve (en este orden):
+//   trendScore  -> score unificado del marco [-4..+4] (SPEC 6)
+//   stochK, stochEstadoCod, stochFuerzaCod  -> estocastico (SPEC 4)
+//   macdHist, macdEstadoCod, macdFuerzaCod  -> MACD (SPEC 5)
+// Los "Cod" son codigos enteros (Pine no devuelve strings comodos en tuplas
+// largas multi-TF de forma robusta -> usamos codigos y los traducimos fuera).
+// =============================================================================
+f_senales() =>
+    // --- Indicadores base del marco ---
+    _emaF = ta.ema(close, lenEmaF)
+    _emaS = ta.ema(close, lenEmaS)
+    _sma  = ta.sma(close, lenSma)
+    _rsi  = ta.rsi(close, lenRSI)
+    [_macdLine, _signalLine, _] = ta.macd(close, macdFast, macdSlow, macdSig)
+    _hist = _macdLine - _signalLine
+    _histPrev = _hist[1]
+
+    // --- Score unificado (SPEC 6) ---
+    // sign(emaF-emaS) + sign(macd-signal) + sign(close-sma200) + rsiScore
+    _sEma   = _emaF > _emaS ? 1 : _emaF < _emaS ? -1 : 0
+    _sMacd  = _macdLine > _signalLine ? 1 : _macdLine < _signalLine ? -1 : 0
+    _sTrend = close > _sma ? 1 : close < _sma ? -1 : 0
+    _sRsi   = _rsi > 55 ? 1 : _rsi < 45 ? -1 : 0
+    _trendScore = _sEma + _sMacd + _sTrend + _sRsi
+
+    // --- Estocastico (SPEC 3/4): %K = stoch suavizado SMA(smoothK), %D = SMA(%K,smoothD) ---
+    _kRaw = ta.stoch(close, high, low, lenStoch)
+    _k    = ta.sma(_kRaw, smoothK)
+    _d    = ta.sma(_k, smoothD)
+    _kPrev = _k[1]
+    _dPrev = _d[1]
+    _crossUp   = _kPrev <= _dPrev and _k > _d        // cruce alcista en este cierre
+    _crossDn   = _kPrev >= _dPrev and _k < _d        // cruce bajista en este cierre
+    // cruce "reciente" (<=2 barras): comprueba este cierre y el anterior
+    _crossUpRec = _crossUp or (_k[1] > _d[1] and _k[2] <= _d[2])
+    _crossDnRec = _crossDn or (_k[1] < _d[1] and _k[2] >= _d[2])
+    _kSubiendo  = _k > _kPrev
+    _pendK = _k - _kPrev                              // pendiente de %K
+    _pendD = _d - _dPrev                              // pendiente de %D
+
+    // ESTADO estocastico (codigos): 2 CRUCE ALCISTA, -2 CRUCE BAJISTA, 1 ALCISTA, -1 BAJISTA, 0 NEUTRAL
+    _stEstadoCod = _crossUp ? 2 : _crossDn ? -2 : _k > _d ? 1 : _k < _d ? -1 : 0
+
+    // FUERZA estocastico (prioridad SPEC 4). Codigos:
+    //  6 REBOTE DESDE VENTA, 5 INICIO ALCISTA, -5 NACE BAJISTA, 4 VIGILAR BAJISTA,
+    // -4 VIGILAR ALCISTA, 3 SOBRECOMPRA, -3 SOBREVENTA, 2 ALCISTA FUERTE,
+    // -2 BAJISTA FUERTE, 1 ALCISTA, -1 BAJISTA, 0 NEUTRAL
+    _dist = math.abs(_k - _d)
+    _stFuerzaCod = 0
+    if _k < 20 and _kSubiendo and (_crossUp or _crossUpRec)
+        _stFuerzaCod := 6
+    else if _crossUpRec
+        _stFuerzaCod := 5
+    else if _crossDnRec
+        _stFuerzaCod := -5
+    else if _k > _d and _pendK < _pendD
+        _stFuerzaCod := 4
+    else if _k < _d and _pendK > _pendD
+        _stFuerzaCod := -4
+    else if _k > 80
+        _stFuerzaCod := 3
+    else if _k < 20
+        _stFuerzaCod := -3
+    else if _dist >= 12 and _k > _d
+        _stFuerzaCod := 2
+    else if _dist >= 12 and _k < _d
+        _stFuerzaCod := -2
+    else if _k > _d
+        _stFuerzaCod := 1
+    else if _k < _d
+        _stFuerzaCod := -1
+    else
+        _stFuerzaCod := 0
+
+    // ESTADO MACD (SPEC 5): hist>0 ALCISTA(1), hist<0 BAJISTA(-1), 0 NEUTRAL(0)
+    _mcEstadoCod = _hist > 0 ? 1 : _hist < 0 ? -1 : 0
+
+    // FUERZA MACD (SPEC 5). Codigos:
+    //  3 IMPULSO ALCISTA SANO, 1 PERDIENDO FUERZA, -3 IMPULSO BAJISTA SANO,
+    // -1 RECUPERANDO FUERZA, 2 VIGILAR CRUCE ALCISTA, -2 VIGILAR CRUCE BAJISTA, 0 NEUTRAL
+    // "muy pequeno" = |hist| < umbral relativo al precio del marco (escala-invariante).
+    _histTiny = math.abs(_hist) < (close * 0.0005)
+    _mcFuerzaCod = 0
+    if _histTiny and _hist >= _histPrev
+        _mcFuerzaCod := 2
+    else if _histTiny and _hist < _histPrev
+        _mcFuerzaCod := -2
+    else if _hist > 0 and _hist > _histPrev
+        _mcFuerzaCod := 3
+    else if _hist > 0 and _hist <= _histPrev
+        _mcFuerzaCod := 1
+    else if _hist < 0 and _hist < _histPrev
+        _mcFuerzaCod := -3
+    else if _hist < 0 and _hist >= _histPrev
+        _mcFuerzaCod := -1
+    else
+        _mcFuerzaCod := 0
+
+    [_trendScore, _k, _stEstadoCod, _stFuerzaCod, _hist, _mcEstadoCod, _mcFuerzaCod]
+
+// Helper multi-TF: llama f_senales() en el marco _tf (lookahead SIEMPRE off).
+f_tf(simple string _tf) =>
+    request.security(syminfo.tickerid, _tf, f_senales(), lookahead = barmerge.lookahead_off)
+
+// --- Recolecta las 7 senales para los 9 marcos ---
+[t1,  k1,  se1,  sf1,  h1,  me1,  mf1 ] = f_tf("1")
+[t3,  k3,  se3,  sf3,  h3,  me3,  mf3 ] = f_tf("3")
+[t5,  k5,  se5,  sf5,  h5,  me5,  mf5 ] = f_tf("5")
+[t15, k15, se15, sf15, h15, me15, mf15] = f_tf("15")
+[t30, k30, se30, sf30, h30, me30, mf30] = f_tf("30")
+[t60, k60, se60, sf60, h60, me60, mf60] = f_tf("60")
+[t120,k120,se120,sf120,h120,me120,mf120] = f_tf("120")
+[t240,k240,se240,sf240,h240,me240,mf240] = f_tf("240")
+[tD,  kD,  seD,  sfD,  hD,  meD,  mfD ] = f_tf("D")
+
+// =============================================================================
+// 3) TRADUCTORES DE CODIGOS A TEXTO + COLOR  (SPEC 4,5,6)
+// =============================================================================
+// --- Tendencia unificada (SPEC 6) ---
+f_trendEstado(int _sc) =>
+    _sc > 0 ? "ALCISTA" : _sc < 0 ? "BAJISTA" : "NEUTRAL"
+
+f_trendFuerza(int _sc) =>
+    _a = math.abs(_sc)
+    _a >= 3 ? "FUERTE" : _sc == 0 ? "EQUILIBRIO" : "NORMAL"
+
+// Color por signo del score (verde/rojo/ambar).
+f_colSign(int _sc) =>
+    _sc > 0 ? colAlc : _sc < 0 ? colBaj : colAviso
+
+// Fondo de celda atenuado por signo.
+f_bgSign(int _sc) =>
+    _sc > 0 ? color.new(colAlc, 80) : _sc < 0 ? color.new(colBaj, 80) : color.new(colAviso, 82)
+
+// --- ESTADO estocastico (texto) ---
+f_stEstadoTxt(int _c) =>
+    _c == 2 ? "CRUCE ALCISTA" : _c == -2 ? "CRUCE BAJISTA" : _c == 1 ? "ALCISTA" : _c == -1 ? "BAJISTA" : "NEUTRAL"
+
+// --- FUERZA estocastico (texto, vocabulario SPEC) ---
+f_stFuerzaTxt(int _c) =>
+    _c == 6 ? "REBOTE DESDE VENTA" : _c == 5 ? "INICIO ALCISTA" : _c == -5 ? "NACE BAJISTA" : _c == 4 ? "VIGILAR BAJISTA" : _c == -4 ? "VIGILAR ALCISTA" : _c == 3 ? "SOBRECOMPRA" : _c == -3 ? "SOBREVENTA" : _c == 2 ? "ALCISTA FUERTE" : _c == -2 ? "BAJISTA FUERTE" : _c == 1 ? "ALCISTA" : _c == -1 ? "BAJISTA" : "NEUTRAL"
+
+// --- ESTADO MACD (texto) ---
+f_mcEstadoTxt(int _c) =>
+    _c == 1 ? "ALCISTA" : _c == -1 ? "BAJISTA" : "NEUTRAL"
+
+// --- FUERZA MACD (texto, vocabulario SPEC) ---
+f_mcFuerzaTxt(int _c) =>
+    _c == 3 ? "IMPULSO ALCISTA SANO" : _c == 1 ? "PERDIENDO FUERZA" : _c == -3 ? "IMPULSO BAJISTA SANO" : _c == -1 ? "RECUPERANDO FUERZA" : _c == 2 ? "VIGILAR CRUCE ALCISTA" : _c == -2 ? "VIGILAR CRUCE BAJISTA" : "NEUTRAL"
+
+// =============================================================================
+// 4) TENDENCIA UNIFICADA GLOBAL + SCORE GLOBAL (SPEC 6, 8)
+// =============================================================================
+// Score global = suma de los 9 scores unificados. Conteo de marcos a favor.
+scoreGlobal = t1 + t3 + t5 + t15 + t30 + t60 + t120 + t240 + tD
+
+f_isAlc(int _sc) => _sc > 0 ? 1 : 0
+f_isBaj(int _sc) => _sc < 0 ? 1 : 0
+nAlc = f_isAlc(t1)+f_isAlc(t3)+f_isAlc(t5)+f_isAlc(t15)+f_isAlc(t30)+f_isAlc(t60)+f_isAlc(t120)+f_isAlc(t240)+f_isAlc(tD)
+nBaj = f_isBaj(t1)+f_isBaj(t3)+f_isBaj(t5)+f_isBaj(t15)+f_isBaj(t30)+f_isBaj(t60)+f_isBaj(t120)+f_isBaj(t240)+f_isBaj(tD)
+nVal = nAlc + nBaj
+domTrend = nVal == 0 ? "NEUTRAL" : nBaj > nAlc ? "BAJISTA" : nAlc > nBaj ? "ALCISTA" : "NEUTRAL"
+domCount = math.max(nAlc, nBaj)
+
+// =============================================================================
+// 5) RESUMEN TACTICO INTRADIA / SWING  (SPEC 7)
+// -----------------------------------------------------------------------------
+// SCORE float ponderado: cada marco aporta peso x signo(score unificado).
+//   intradia {1m:0.5, 3m:0.75, 5m:1, 15m:1.25, 30m:1.5}
+//   swing    {1H:1, 2H:1.25, 4H:1.5, Diario:2}
+// TENDENCIA, MOTOR (el marco MAS PEQUENO a favor), CONFIRMACION (marcos MAYORES
+// que confirman/faltan), LECTURA (frase accionable).
+// =============================================================================
+f_sgn(int _sc) => _sc > 0 ? 1.0 : _sc < 0 ? -1.0 : 0.0
+
+// --- SCORE ponderado por grupo ---
+scoreIntra = 0.5*f_sgn(t1) + 0.75*f_sgn(t3) + 1.0*f_sgn(t5) + 1.25*f_sgn(t15) + 1.5*f_sgn(t30)
+scoreSwing = 1.0*f_sgn(t60) + 1.25*f_sgn(t120) + 1.5*f_sgn(t240) + 2.0*f_sgn(tD)
+// Redondeo a 2 decimales (da valores tipo -1.5, 2, 1.25, -5.5).
+scoreIntraR = math.round(scoreIntra * 100) / 100
+scoreSwingR = math.round(scoreSwing * 100) / 100
+
+// --- TENDENCIA por grupo (SPEC 7) ---
+f_tendencia(float _sc) =>
+    _abs = math.abs(_sc)
+    _abs <= umbralCero ? "NEUTRAL" : _sc >= umbralFuerte ? "ALCISTA" : _sc <= -umbralFuerte ? "BAJISTA" : _sc > 0 ? "POSIBLE ALCISTA" : "POSIBLE BAJISTA"
+
+tendIntra = f_tendencia(scoreIntraR)
+tendSwing = f_tendencia(scoreSwingR)
+
+// Signo de la tendencia del grupo (+1 alcista, -1 bajista, 0 neutral).
+f_tendSign(string _t) =>
+    str.contains(_t, "ALCISTA") ? 1 : str.contains(_t, "BAJISTA") ? -1 : 0
+sgnIntra = f_tendSign(tendIntra)
+sgnSwing = f_tendSign(tendSwing)
+
+// --- MOTOR: el marco MAS PEQUENO del grupo cuyo ESTADO coincide con el signo ---
+// Etiquetas de marco por grupo (de menor a mayor).
+f_motorIntra(int _s) =>
+    _s == 0 ? "sin motor claro" : (f_isAlc(t1)==1?1:0)*(_s>0?1:0)+(f_isBaj(t1)==1?1:0)*(_s<0?1:0) > 0 ? "1m" : (f_isAlc(t3)==1?1:0)*(_s>0?1:0)+(f_isBaj(t3)==1?1:0)*(_s<0?1:0) > 0 ? "3m" : (f_isAlc(t5)==1?1:0)*(_s>0?1:0)+(f_isBaj(t5)==1?1:0)*(_s<0?1:0) > 0 ? "5m" : (f_isAlc(t15)==1?1:0)*(_s>0?1:0)+(f_isBaj(t15)==1?1:0)*(_s<0?1:0) > 0 ? "15m" : (f_isAlc(t30)==1?1:0)*(_s>0?1:0)+(f_isBaj(t30)==1?1:0)*(_s<0?1:0) > 0 ? "30m" : "sin motor claro"
+
+f_motorSwing(int _s) =>
+    _s == 0 ? "sin motor claro" : (f_isAlc(t60)==1?1:0)*(_s>0?1:0)+(f_isBaj(t60)==1?1:0)*(_s<0?1:0) > 0 ? "1H" : (f_isAlc(t120)==1?1:0)*(_s>0?1:0)+(f_isBaj(t120)==1?1:0)*(_s<0?1:0) > 0 ? "2H" : (f_isAlc(t240)==1?1:0)*(_s>0?1:0)+(f_isBaj(t240)==1?1:0)*(_s<0?1:0) > 0 ? "4H" : (f_isAlc(tD)==1?1:0)*(_s>0?1:0)+(f_isBaj(tD)==1?1:0)*(_s<0?1:0) > 0 ? "Diario" : "sin motor claro"
+
+motorIntra = f_motorIntra(sgnIntra)
+motorSwing = f_motorSwing(sgnSwing)
+
+// Texto "X manda arriba/abajo".
+f_motorTxt(string _m, int _s) =>
+    _m == "sin motor claro" ? _m : _m + " manda " + (_s > 0 ? "arriba" : "abajo")
+motorTxtIntra = f_motorTxt(motorIntra, sgnIntra)
+motorTxtSwing = f_motorTxt(motorSwing, sgnSwing)
+
+// --- CONFIRMACION: marcos MAYORES que confirman vs faltan (texto dinamico) ---
+// Construye dos listas (a favor / en contra-o-falta) entre los marcos del grupo.
+// "confirma" = mismo signo que la tendencia; "falta" = no confirma.
+f_addList(string _acc, string _etq) =>
+    _acc == "" ? _etq : _acc + "/" + _etq
+
+// INTRADIA: marcos mayores que el motor que confirman / faltan.
+f_confIntra(int _s) =>
+    _conf = ""
+    _falta = ""
+    if _s != 0
+        _confSig = _s
+        // 15m
+        _c15 = (t15 > 0 ? 1 : t15 < 0 ? -1 : 0)
+        _conf := _c15 == _confSig ? f_addList(_conf, "15m") : _conf
+        _falta := _c15 != _confSig ? f_addList(_falta, "15m") : _falta
+        // 30m
+        _c30 = (t30 > 0 ? 1 : t30 < 0 ? -1 : 0)
+        _conf := _c30 == _confSig ? f_addList(_conf, "30m") : _conf
+        _falta := _c30 != _confSig ? f_addList(_falta, "30m") : _falta
+    _dir = _s > 0 ? "subida" : "caida"
+    _txtConf  = _conf  == "" ? "" : _conf  + " confirma " + _dir
+    _txtFalta = _falta == "" ? "" : "falta " + _falta
+    _s == 0 ? "sin confirmacion" : _txtConf == "" ? _txtFalta : _txtFalta == "" ? _txtConf : _txtConf + " | " + _txtFalta
+
+// SWING: marcos mayores (2H,4H) confirman/faltan + estado del Diario explicito.
+f_confSwing(int _s) =>
+    _conf = ""
+    _falta = ""
+    if _s != 0
+        _confSig = _s
+        _c120 = (t120 > 0 ? 1 : t120 < 0 ? -1 : 0)
+        _conf := _c120 == _confSig ? f_addList(_conf, "2H") : _conf
+        _falta := _c120 != _confSig ? f_addList(_falta, "2H") : _falta
+        _c240 = (t240 > 0 ? 1 : t240 < 0 ? -1 : 0)
+        _conf := _c240 == _confSig ? f_addList(_conf, "4H") : _conf
+        _falta := _c240 != _confSig ? f_addList(_falta, "4H") : _falta
+    _dir = _s > 0 ? "subida" : "caida"
+    _txtConf  = _conf  == "" ? "" : _conf  + " confirma " + _dir
+    _txtFalta = _falta == "" ? "" : "falta " + _falta
+    _cuerpo = _s == 0 ? "sin confirmacion" : _txtConf == "" ? _txtFalta : _txtFalta == "" ? _txtConf : _txtConf + " | " + _txtFalta
+    // Diario a favor / en contra respecto a la tendencia del swing.
+    _cD = (tD > 0 ? 1 : tD < 0 ? -1 : 0)
+    _diario = _s == 0 ? "" : _cD == _s ? " | Diario a favor" : _cD == 0 ? " | Diario plano" : " | Diario en contra"
+    _cuerpo + _diario
+
+confIntra = f_confIntra(sgnIntra)
+confSwing = f_confSwing(sgnSwing)
+
+// --- LECTURA accionable (SPEC 7) ---
+f_lecturaIntra(string _tend, float _sc) =>
+    _tend == "ALCISTA" or _tend == "POSIBLE ALCISTA" ? "Buscar largos finos 1m/3m" : _tend == "BAJISTA" ? "Buscar cortos finos 1m/3m" : _tend == "POSIBLE BAJISTA" ? "Esperar fin de caida" : "Sin sesgo intradia claro"
+
+f_lecturaSwing(string _tend, float _sc) =>
+    _tend == "ALCISTA" or _tend == "POSIBLE ALCISTA" ? "Swing alcista en desarrollo" : _tend == "BAJISTA" or _tend == "POSIBLE BAJISTA" ? "Swing bajista en desarrollo / proteger" : "Swing lateral - esperar definicion"
+
+lectIntra = f_lecturaIntra(tendIntra, scoreIntraR)
+lectSwing = f_lecturaSwing(tendSwing, scoreSwingR)
+
+// =============================================================================
+// 6) SEMAFORO + VEREDICTO + LECTURA EJECUTIVA  (SPEC 8)
+// =============================================================================
+semaforo = scoreGlobal >= threshSem ? "VERDE" : scoreGlobal <= -threshSem ? "ROJO" : "AMARILLO"
+// Emojis del semaforo: en Pine v6 NO existe el escape \u{...}; los caracteres
+// (fuera del BMP, p. ej. 🟢) deben ir LITERALES en el codigo fuente UTF-8.
+semEmoji = semaforo == "VERDE" ? "🟢" : semaforo == "ROJO" ? "🔴" : "🟡"
+colSem   = semaforo == "VERDE" ? colAlc : semaforo == "ROJO" ? colBaj : colAviso
+
+// RSI del marco actual del grafico (para matiz sobrecompra/sobreventa del veredicto).
+rsiChart = ta.rsi(close, lenRSI)
+
+veredicto = domTrend == "BAJISTA" and rsiChart < 35 ? "TECNICO BAJISTA PERO SOBREVENDIDA - PARA VIGILAR" : domTrend == "ALCISTA" and rsiChart > 65 ? "TECNICO ALCISTA PERO SOBRECOMPRADA - TOMAR CON CALMA" : "TENDENCIA " + domTrend + " - " + (close >= close[1] ? "MOMENTO VERDE" : "MOMENTO ROJO")
+
+trendDetail = nVal == 0 ? "Sin datos suficientes." : domTrend == "NEUTRAL" ? "Mixto: " + str.tostring(nAlc) + " alcista(s) vs " + str.tostring(nBaj) + " bajista(s) de " + str.tostring(nVal) + "." : domTrend + " en " + str.tostring(domCount) + "/" + str.tostring(nVal) + " marcos."
+
+lectEjec = semEmoji + " " + veredicto + " (score global " + str.tostring(scoreGlobal) + ", " + trendDetail + ")"
+
+// =============================================================================
+// 7) SOPORTES / RESISTENCIAS POR PIVOTES  (SPEC 8, invariante S < precio < R)
+// =============================================================================
+ph = ta.pivothigh(high, pivLeft, pivRight)
+pl = ta.pivotlow(low,  pivLeft, pivRight)
+
+var float resLevel = na
+var float supLevel = na
+
+// Guarda el pivote ALTO si esta por encima del precio (resistencia) y el BAJO si
+// esta por debajo (soporte). Invariante de FinScope (indicators.js).
+if not na(ph) and (na(close) or ph > close)
+    resLevel := ph
+if not na(pl) and (na(close) or pl < close)
+    supLevel := pl
+// Si el precio cruza el nivel, deja de ser valido en su lado -> se limpia.
+if not na(resLevel) and close >= resLevel
+    resLevel := na
+if not na(supLevel) and close <= supLevel
+    supLevel := na
+
+var line  resLine = na
+var line  supLine = na
+var label resLbl  = na
+var label supLbl  = na
+
+if barstate.islast and showSR
+    line.delete(resLine)
+    line.delete(supLine)
+    label.delete(resLbl)
+    label.delete(supLbl)
+    if not na(resLevel)
+        resLine := line.new(bar_index - 1, resLevel, bar_index, resLevel, extend = extend.right, color = color.new(colBaj, 0), width = 2, style = line.style_dashed)
+        resLbl  := label.new(bar_index, resLevel, "R " + str.tostring(resLevel, format.mintick), style = label.style_label_left, textcolor = color.white, color = color.new(colBaj, 15), size = size.small)
+    if not na(supLevel)
+        supLine := line.new(bar_index - 1, supLevel, bar_index, supLevel, extend = extend.right, color = color.new(colAlc, 0), width = 2, style = line.style_dashed)
+        supLbl  := label.new(bar_index, supLevel, "S " + str.tostring(supLevel, format.mintick), style = label.style_label_left, textcolor = color.white, color = color.new(colAlc, 15), size = size.small)
+
+// =============================================================================
+// 8) PREDICCION POR REGLAS  (SPEC 8 — objetivoSube / objetivoBaja con ATR + S/R)
+// =============================================================================
+atrChart = ta.atr(lenATR)
+objetivoSube = not na(resLevel) ? resLevel : close + atrMult * atrChart
+objetivoBaja = not na(supLevel) ? supLevel : close - atrMult * atrChart
+
+predDir   = domTrend == "ALCISTA" ? "PROBABLE SUBIDA" : domTrend == "BAJISTA" ? "PROBABLE BAJADA" : "LATERAL / INCIERTO"
+predArrow = domTrend == "ALCISTA" ? "▲" : domTrend == "BAJISTA" ? "▼" : "•"
+
+var label predLbl = na
+if barstate.islast and showPred
+    label.delete(predLbl)
+    txtPred = semEmoji + " " + predArrow + " " + predDir + "\n" + "Veredicto: " + veredicto + "\n" + trendDetail + "\n" + "INTRADIA: " + tendIntra + " (" + str.tostring(scoreIntraR) + ") - " + lectIntra + "\n" + "SWING: " + tendSwing + " (" + str.tostring(scoreSwingR) + ") - " + lectSwing + "\n" + "Si sube -> " + str.tostring(objetivoSube, format.mintick) + "\n" + "Si baja -> " + str.tostring(objetivoBaja, format.mintick) + "\n" + "Orientativa: PUEDE FALLAR. No es recomendacion."
+    predLbl := label.new(bar_index, high, txtPred, style = label.style_label_lower_right, textcolor = color.white, color = color.new(colSem, 12), size = size.normal)
+
+// =============================================================================
+// 9) POSICIONES DE TABLA (input -> position.*)
+// =============================================================================
+f_pos(string _s) =>
+    _s == "Arriba izquierda" ? position.top_left : _s == "Arriba derecha" ? position.top_right : _s == "Abajo izquierda" ? position.bottom_left : _s == "Abajo derecha" ? position.bottom_right : position.middle_right
+
+// =============================================================================
+// 10) TABLA MATRIZ UNIFICADA  (TF / ESTADO / FUERZA — SPEC 6)
+// -----------------------------------------------------------------------------
+// Una fila por marco (9) + cabecera + fila semaforo. Coloreada por signo.
+// =============================================================================
+var table tblM = na
+
+// Helper para rellenar una fila de la matriz (marco, score).
+f_filaMatriz(table _t, int _row, string _etq, int _sc) =>
+    _bgFila = _row % 2 == 0 ? color.new(colFila, 0) : color.new(colFondo, 0)
+    table.cell(_t, 0, _row, _etq, text_color = colTxt, text_size = size.small, bgcolor = _bgFila)
+    table.cell(_t, 1, _row, f_trendEstado(_sc), text_color = f_colSign(_sc), text_size = size.small, bgcolor = f_bgSign(_sc))
+    table.cell(_t, 2, _row, f_trendFuerza(_sc), text_color = f_colSign(_sc), text_size = size.small, bgcolor = f_bgSign(_sc))
+
+if showMatriz and barstate.islast
+    tblM := table.new(f_pos(posMatriz), 3, 11, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    // Cabecera.
+    table.cell(tblM, 0, 0, "TF",     text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 1, 0, "ESTADO", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 2, 0, "FUERZA", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    // 9 marcos.
+    f_filaMatriz(tblM, 1, "1m",     t1)
+    f_filaMatriz(tblM, 2, "3m",     t3)
+    f_filaMatriz(tblM, 3, "5m",     t5)
+    f_filaMatriz(tblM, 4, "15m",    t15)
+    f_filaMatriz(tblM, 5, "30m",    t30)
+    f_filaMatriz(tblM, 6, "1H",     t60)
+    f_filaMatriz(tblM, 7, "2H",     t120)
+    f_filaMatriz(tblM, 8, "4H",     t240)
+    f_filaMatriz(tblM, 9, "Diario", tD)
+    // Fila semaforo.
+    table.cell(tblM, 0, 10, "SEM.", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 1, 10, semEmoji + " " + semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    table.cell(tblM, 2, 10, str.tostring(domCount) + "/" + str.tostring(nVal), text_color = colTxt, text_size = size.small, bgcolor = color.new(colHead, 0))
+
+// =============================================================================
+// 11) RESUMEN TACTICO  (MARCO / TENDENCIA / MOTOR / CONFIRMACION / SCORE / LECTURA)
+// -----------------------------------------------------------------------------
+// Dos filas: INTRADIA y SWING. Las 6 columnas EXACTAS de la imagen (SPEC 7).
+// =============================================================================
+var table tblT = na
+
+f_colTend(string _t) =>
+    str.contains(_t, "ALCISTA") ? colAlc : str.contains(_t, "BAJISTA") ? colBaj : colAviso
+f_bgTend(string _t) =>
+    str.contains(_t, "ALCISTA") ? color.new(colAlc, 80) : str.contains(_t, "BAJISTA") ? color.new(colBaj, 80) : color.new(colAviso, 82)
+
+if showTact and barstate.islast
+    tblT := table.new(f_pos(posTact), 6, 3, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    // Cabecera (6 columnas exactas).
+    table.cell(tblT, 0, 0, "MARCO",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 1, 0, "TENDENCIA",    text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 2, 0, "MOTOR",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 3, 0, "CONFIRMACION", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 4, 0, "SCORE",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 5, 0, "LECTURA",      text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    // Fila INTRADIA.
+    table.cell(tblT, 0, 1, "INTRADIA",   text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblT, 1, 1, tendIntra,    text_color = f_colTend(tendIntra), text_size = size.small, bgcolor = f_bgTend(tendIntra))
+    table.cell(tblT, 2, 1, motorTxtIntra,text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblT, 3, 1, confIntra,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblT, 4, 1, str.tostring(scoreIntraR), text_color = scoreIntraR > 0 ? colAlc : scoreIntraR < 0 ? colBaj : colAviso, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblT, 5, 1, lectIntra,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFila, 0))
+    // Fila SWING.
+    table.cell(tblT, 0, 2, "SWING",      text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblT, 1, 2, tendSwing,    text_color = f_colTend(tendSwing), text_size = size.small, bgcolor = f_bgTend(tendSwing))
+    table.cell(tblT, 2, 2, motorTxtSwing,text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblT, 3, 2, confSwing,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblT, 4, 2, str.tostring(scoreSwingR), text_color = scoreSwingR > 0 ? colAlc : scoreSwingR < 0 ? colBaj : colAviso, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblT, 5, 2, lectSwing,    text_color = colTxt,         text_size = size.small, bgcolor = color.new(colFondo, 0))
+
+// =============================================================================
+// 12) PLOTS DE CONTEXTO  (no tapan el precio)
+// =============================================================================
+emaFPlot = ta.ema(close, lenEmaF)
+emaSPlot = ta.ema(close, lenEmaS)
+smaPlot  = ta.sma(close, lenSma)
+plot(showEmas ? emaFPlot : na, "EMA rapida", color = color.new(#4C8DFF, 0), linewidth = 1)
+plot(showEmas ? emaSPlot : na, "EMA lenta",  color = color.new(colAviso, 0), linewidth = 1)
+plot(showEmas ? smaPlot  : na, "SMA larga",  color = color.new(colTxtT, 0), linewidth = 2)
+
+// =============================================================================
+// 13) EXPORT IA  (JSON v2.0 de UNA linea via alert — SPEC 9)
+// -----------------------------------------------------------------------------
+// Cuando "Emitir IA" esta activo, en el cierre de cada vela se emite el JSON v2.0
+// COMPLETO: por-marco {trend,stochK,stochEstado,stochFuerza,macdHist,macdEstado,
+// macdFuerza}, intradia, swing, niveles, prediccion y secret.
+// Para activarlo: crea una alerta sobre este indicador con condicion "Any alert()
+// function call" y apunta el webhook a tu servidor ai-bridge.
+// =============================================================================
+// Bloque JSON de UN marco. trend como texto; numeros con formato; estados/fuerzas
+// traducidos a texto. Se escapan comillas usando el helper de cadena.
+f_q(string _s) => "\"" + _s + "\""
+
+f_jsonTF(string _etq, int _t, float _k, int _se, int _sf, float _h, int _me, int _mf) =>
+    f_q(_etq) + ":{" + f_q("trend") + ":" + f_q(f_trendEstado(_t)) + "," + f_q("stochK") + ":" + str.tostring(_k, "#.##") + "," + f_q("stochEstado") + ":" + f_q(f_stEstadoTxt(_se)) + "," + f_q("stochFuerza") + ":" + f_q(f_stFuerzaTxt(_sf)) + "," + f_q("macdHist") + ":" + str.tostring(_h, "#.####") + "," + f_q("macdEstado") + ":" + f_q(f_mcEstadoTxt(_me)) + "," + f_q("macdFuerza") + ":" + f_q(f_mcFuerzaTxt(_mf)) + "}"
+
+if emitAI and barstate.isconfirmed
+    tfBlock = "{" + f_jsonTF("1m",  t1,  k1,  se1,  sf1,  h1,  me1,  mf1 ) + "," + f_jsonTF("3m",  t3,  k3,  se3,  sf3,  h3,  me3,  mf3 ) + "," + f_jsonTF("5m",  t5,  k5,  se5,  sf5,  h5,  me5,  mf5 ) + "," + f_jsonTF("15m", t15, k15, se15, sf15, h15, me15, mf15) + "," + f_jsonTF("30m", t30, k30, se30, sf30, h30, me30, mf30) + "," + f_jsonTF("1H",  t60, k60, se60, sf60, h60, me60, mf60) + "," + f_jsonTF("2H",  t120,k120,se120,sf120,h120,me120,mf120) + "," + f_jsonTF("4H",  t240,k240,se240,sf240,h240,me240,mf240) + "," + f_jsonTF("Diario", tD, kD, seD, sfD, hD, meD, mfD) + "}"
+
+    intradiaBlock = "{" + f_q("tendencia") + ":" + f_q(tendIntra) + "," + f_q("motor") + ":" + f_q(motorIntra) + "," + f_q("confirmacion") + ":" + f_q(confIntra) + "," + f_q("score") + ":" + str.tostring(scoreIntraR) + "," + f_q("lectura") + ":" + f_q(lectIntra) + "}"
+
+    swingBlock = "{" + f_q("tendencia") + ":" + f_q(tendSwing) + "," + f_q("motor") + ":" + f_q(motorSwing) + "," + f_q("confirmacion") + ":" + f_q(confSwing) + "," + f_q("score") + ":" + str.tostring(scoreSwingR) + "," + f_q("lectura") + ":" + f_q(lectSwing) + "}"
+
+    nivelesBlock = "{" + f_q("soporte") + ":" + (na(supLevel) ? "null" : str.tostring(supLevel, format.mintick)) + "," + f_q("resistencia") + ":" + (na(resLevel) ? "null" : str.tostring(resLevel, format.mintick)) + "}"
+
+    prediccionBlock = "{" + f_q("objetivoSube") + ":" + str.tostring(objetivoSube, format.mintick) + "," + f_q("objetivoBaja") + ":" + str.tostring(objetivoBaja, format.mintick) + "}"
+
+    jsonMsg = "{" + f_q("app") + ":" + f_q("PineScope") + "," + f_q("v") + ":" + f_q("2.0") + "," + f_q("secret") + ":" + f_q(secretAI) + "," + f_q("symbol") + ":" + f_q(syminfo.ticker) + "," + f_q("price") + ":" + str.tostring(close, format.mintick) + "," + f_q("chartTF") + ":" + f_q(timeframe.period) + "," + f_q("semaforo") + ":" + f_q(semaforo) + "," + f_q("scoreGlobal") + ":" + str.tostring(scoreGlobal) + "," + f_q("tf") + ":" + tfBlock + "," + f_q("intradia") + ":" + intradiaBlock + "," + f_q("swing") + ":" + swingBlock + "," + f_q("niveles") + ":" + nivelesBlock + "," + f_q("prediccion") + ":" + prediccionBlock + "}"
+
+    alert(jsonMsg, alert.freq_once_per_bar_close)
+
+// =============================================================================
+// 14) ALERTAS LEGIBLES PREDEFINIDAS (ademas del export IA)
+// =============================================================================
+alertcondition(ta.crossover(emaFPlot, emaSPlot),  "Cruce alcista EMAs", "PineScope: cruce ALCISTA de EMAs")
+alertcondition(ta.crossunder(emaFPlot, emaSPlot), "Cruce bajista EMAs", "PineScope: cruce BAJISTA de EMAs")

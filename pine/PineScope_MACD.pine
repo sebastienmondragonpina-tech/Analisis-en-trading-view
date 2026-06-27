@@ -1,0 +1,331 @@
+//@version=6
+// =============================================================================
+// PineScope Pro - MACD ("Chris IA MC Master" PRO)
+// Componente: pine/PineScope_MACD.pine   (overlay=false)
+// Replica/mejora el panel MACD: histograma coloreado por signo + crecimiento,
+// lineas MACD/senal, tabla multi-TF (TF . HIST . ESTADO . FUERZA) para los 9
+// marcos y resumen tactico INTRADIA / SWING (6 columnas) basado en el MACD.
+// Cumple el CONTRATO docs/SPEC.md (secciones 2,3,5,7,10).
+// Pine Script v6 NATIVO. Sin internet, sin IA, sin captura: todo OHLCV.
+// =============================================================================
+indicator("PineScope Pro - MACD", shorttitle="PScope MACD", overlay=false, max_lines_count=500, max_labels_count=500)
+
+// =============================================================================
+// 0) PALETA (SPEC seccion 10 - tema oscuro, profesional)
+// =============================================================================
+colAlza      = #26A69A          // alcista
+colBaja      = #EF5350          // bajista
+colAviso     = #E0A800          // neutro / vigilar
+colFondo     = #0E1117          // fondo tabla
+colCabecera  = #1B2230          // cabecera
+colTexto     = #D1D4DC          // texto principal
+colTenue     = #8A93A2          // texto tenue / TF
+colFilaA     = #11161F          // fila alterna sutil A
+colFilaB     = #0E1117          // fila alterna sutil B
+// Tonos del histograma (4 tonos: signo x crecimiento/decrecimiento)
+colHistAlzaFuerte = #26A69A     // hist>0 y creciendo  -> verde solido
+colHistAlzaDebil  = #80CBC4     // hist>0 y decreciendo-> verde claro
+colHistBajaFuerte = #EF5350     // hist<0 y cayendo    -> rojo solido
+colHistBajaDebil  = #EF9A9A     // hist<0 y recuperando-> rojo claro
+
+// =============================================================================
+// 1) INPUTS
+// =============================================================================
+longFast   = input.int(12, "EMA rapida (MACD)", minval=1, group="MACD")
+longSlow   = input.int(26, "EMA lenta (MACD)",  minval=1, group="MACD")
+longSig    = input.int(9,  "Suavizado senal",   minval=1, group="MACD")
+epsNear    = input.float(0.0, "Umbral 'cerca de cero' (0 = auto por ATR)", minval=0.0, step=0.01, group="MACD", tooltip="Si es 0 se calcula automaticamente como una fraccion del ATR del marco.")
+
+posTabla   = input.string("top_right", "Posicion tabla TF", options=["top_right","top_left","top_center","middle_right","middle_left","bottom_right","bottom_left","bottom_center"], group="Tablas")
+posResumen = input.string("bottom_right", "Posicion resumen INTRADIA/SWING", options=["top_right","top_left","middle_right","middle_left","bottom_right","bottom_left","bottom_center"], group="Tablas")
+tamTexto   = input.string("normal", "Tamano de texto", options=["tiny","small","normal","large"], group="Tablas")
+mostrarTF  = input.bool(true,  "Mostrar tabla multi-TF", group="Tablas")
+mostrarRes = input.bool(true,  "Mostrar resumen INTRADIA/SWING", group="Tablas")
+
+// Umbrales del resumen tactico (SPEC 7)
+umbralFuerte = input.float(2.0, "Umbral score FUERTE (resumen)", minval=0.1, step=0.25, group="Resumen tactico")
+
+// =============================================================================
+// 2) HELPERS DE TAMANO/POSICION (const -> simple)
+// =============================================================================
+f_size(_s) =>
+    _s == "tiny" ? size.tiny : _s == "small" ? size.small : _s == "large" ? size.large : size.normal
+
+f_pos(_p) =>
+    _p == "top_left"      ? position.top_left      :
+     _p == "top_center"    ? position.top_center    :
+     _p == "top_right"     ? position.top_right     :
+     _p == "middle_left"   ? position.middle_left   :
+     _p == "middle_right"  ? position.middle_right  :
+     _p == "bottom_left"   ? position.bottom_left   :
+     _p == "bottom_center" ? position.bottom_center :
+     _p == "bottom_right"  ? position.bottom_right  : position.top_right
+
+txtSize = f_size(tamTexto)
+
+// =============================================================================
+// 3) FUNCION DE SENALES POR MARCO (todo en UNA funcion -> tupla)
+//    Encapsula TODO el calculo MACD del marco para pasarlo como 'expr' a
+//    request.security (regla dura Pine multi-TF). Devuelve:
+//    [hist, histPrev, macdLine, signalLine, estadoCod, fuerzaCod, signo]
+//    Codigos numericos para reconstruir texto/color en el marco grafico:
+//      estadoCod: 1 ALCISTA, -1 BAJISTA, 0 NEUTRAL
+//      fuerzaCod: 1 IMPULSO ALCISTA SANO, 2 PERDIENDO FUERZA,
+//                -1 IMPULSO BAJISTA SANO, -2 RECUPERANDO FUERZA,
+//                 3 VIGILAR CRUCE ALCISTA, -3 VIGILAR CRUCE BAJISTA
+// =============================================================================
+f_macdMarco() =>
+    [_macd, _sig, _hist] = ta.macd(close, longFast, longSlow, longSig)
+    _histPrev = _hist[1]
+    // Umbral 'cerca de cero': manual o automatico por ATR del marco
+    _atr = ta.atr(14)
+    _eps = epsNear > 0.0 ? epsNear : (na(_atr) ? 0.0 : _atr * 0.03)
+    // ESTADO (SPEC 5): por signo del histograma
+    _estadoCod = _hist > 0 ? 1 : _hist < 0 ? -1 : 0
+    // FUERZA (SPEC 5): prioridad -> primero 'cerca de cero' (cruce inminente),
+    // luego impulso sano / perdiendo / recuperando.
+    _cerca = math.abs(_hist) <= _eps
+    _sube  = _hist > _histPrev
+    _fuerzaCod = _cerca and _sube  ?  3 :   // VIGILAR CRUCE ALCISTA
+                 _cerca and not _sube ? -3 :   // VIGILAR CRUCE BAJISTA
+                 _hist > 0 and _hist >  _histPrev ?  1 :  // IMPULSO ALCISTA SANO
+                 _hist > 0 and _hist <= _histPrev ?  2 :  // PERDIENDO FUERZA
+                 _hist < 0 and _hist <  _histPrev ? -1 :  // IMPULSO BAJISTA SANO
+                 _hist < 0 and _hist >= _histPrev ? -2 :  // RECUPERANDO FUERZA
+                 0
+    _signo = _hist > 0 ? 1 : _hist < 0 ? -1 : 0
+    [_hist, _histPrev, _macd, _sig, _estadoCod, _fuerzaCod, _signo]
+
+// Envoltorio multi-TF: una llamada a request.security por marco, lookahead OFF.
+f_pedir(_tf) =>
+    request.security(syminfo.tickerid, _tf, f_macdMarco(), lookahead=barmerge.lookahead_off)
+
+// =============================================================================
+// 4) MARCOS (orden fijo SPEC seccion 2)
+//    1m,3m,5m,15m,30m,1H,2H,4H,Diario -> "1","3","5","15","30","60","120","240","D"
+// =============================================================================
+[h1 , hp1 , m1 , s1 , est1 , fz1 , sg1 ] = f_pedir("1")
+[h3 , hp3 , m3 , s3 , est3 , fz3 , sg3 ] = f_pedir("3")
+[h5 , hp5 , m5 , s5 , est5 , fz5 , sg5 ] = f_pedir("5")
+[h15, hp15, m15, s15, est15, fz15, sg15] = f_pedir("15")
+[h30, hp30, m30, s30, est30, fz30, sg30] = f_pedir("30")
+[h60, hp60, m60, s60, est60, fz60, sg60] = f_pedir("60")
+[h120,hp120,m120,s120,est120,fz120,sg120]= f_pedir("120")
+[h240,hp240,m240,s240,est240,fz240,sg240]= f_pedir("240")
+[hD , hpD , mD , sD , estD , fzD , sgD ] = f_pedir("D")
+
+// =============================================================================
+// 5) PLOTS DEL PANEL (marco del grafico actual)
+//    Histograma 4 tonos + lineas MACD y senal + linea cero.
+// =============================================================================
+[macdCur, sigCur, histCur] = ta.macd(close, longFast, longSlow, longSig)
+histSube = histCur > histCur[1]
+colHist = histCur >= 0 ? (histSube ? colHistAlzaFuerte : colHistAlzaDebil) : (histSube ? colHistBajaDebil : colHistBajaFuerte)
+
+plot(histCur, "Histograma", color=colHist, style=plot.style_columns, histbase=0)
+plot(macdCur, "MACD",  color=#42A5F5, linewidth=2)
+plot(sigCur,  "Senal", color=#FF8F00, linewidth=2)
+hline(0, "Cero", color=color.new(colTenue, 40), linestyle=hline.style_dotted)
+
+// =============================================================================
+// 6) DECODIFICADORES TEXTO + COLOR (SPEC seccion 5)
+// =============================================================================
+f_estTxt(_cod) => _cod == 1 ? "ALCISTA" : _cod == -1 ? "BAJISTA" : "NEUTRAL"
+f_estCol(_cod) => _cod == 1 ? colAlza   : _cod == -1 ? colBaja   : colAviso
+
+f_fzTxt(_cod) =>
+    _cod ==  1 ? "IMPULSO ALCISTA SANO"  :
+     _cod ==  2 ? "PERDIENDO FUERZA"      :
+     _cod == -1 ? "IMPULSO BAJISTA SANO"  :
+     _cod == -2 ? "RECUPERANDO FUERZA"    :
+     _cod ==  3 ? "VIGILAR CRUCE ALCISTA" :
+     _cod == -3 ? "VIGILAR CRUCE BAJISTA" :
+     "NEUTRAL"
+
+f_fzCol(_cod) =>
+    // Verde impulso alcista sano; rojo impulso bajista sano; ambar el resto
+    // (perdiendo/recuperando/vigilar = transicion = aviso).
+    _cod == 1 ? colAlza : _cod == -1 ? colBaja : colAviso
+
+f_histTxt(_h) => na(_h) ? "-" : str.tostring(_h, "#.##")
+
+// =============================================================================
+// 7) RESUMEN TACTICO INTRADIA / SWING (SPEC seccion 7) basado en MACD
+//    SCORE = suma ponderada de (peso x signo del histograma) por grupo.
+//    Pesos: intradia {1m:0.5,3m:0.75,5m:1,15m:1.25,30m:1.5};
+//           swing  {1H:1,2H:1.25,4H:1.5,Diario:2}.
+// =============================================================================
+f_n0(_v) => na(_v) ? 0 : _v   // signo seguro (na -> 0)
+
+// --- SCORE por grupo ---
+scoreIntra = f_n0(sg1)*0.5 + f_n0(sg3)*0.75 + f_n0(sg5)*1.0 + f_n0(sg15)*1.25 + f_n0(sg30)*1.5
+scoreSwing = f_n0(sg60)*1.0 + f_n0(sg120)*1.25 + f_n0(sg240)*1.5 + f_n0(sgD)*2.0
+scoreGlobal = f_n0(sg1)+f_n0(sg3)+f_n0(sg5)+f_n0(sg15)+f_n0(sg30)+f_n0(sg60)+f_n0(sg120)+f_n0(sg240)+f_n0(sgD)
+
+// --- TENDENCIA por score ---
+f_tendencia(_score) =>
+    _t = _score >  umbralFuerte ? "ALCISTA"        :
+         _score >  0.1          ? "POSIBLE ALCISTA":
+         _score < -umbralFuerte ? "BAJISTA"        :
+         _score < -0.1          ? "POSIBLE BAJISTA":
+         "NEUTRAL"
+    _t
+f_tendSigno(_t) => str.contains(_t, "ALCISTA") ? 1 : str.contains(_t, "BAJISTA") ? -1 : 0
+f_tendCol(_t)   => str.contains(_t, "ALCISTA") ? colAlza : str.contains(_t, "BAJISTA") ? colBaja : colAviso
+
+tendIntra = f_tendencia(scoreIntra)
+tendSwing = f_tendencia(scoreSwing)
+
+// --- MOTOR: marco MAS PEQUENO del grupo cuyo ESTADO coincide con el signo de la tendencia ---
+f_motorIntra(_signo) =>
+    _lbl = _signo == 0 ? "-" :
+           f_n0(sg1)  == _signo ? "1m"  :
+           f_n0(sg3)  == _signo ? "3m"  :
+           f_n0(sg5)  == _signo ? "5m"  :
+           f_n0(sg15) == _signo ? "15m" :
+           f_n0(sg30) == _signo ? "30m" : "-"
+    _lbl
+f_motorSwing(_signo) =>
+    _lbl = _signo == 0 ? "-" :
+           f_n0(sg60)  == _signo ? "1H"  :
+           f_n0(sg120) == _signo ? "2H"  :
+           f_n0(sg240) == _signo ? "4H"  :
+           f_n0(sgD)   == _signo ? "Diario" : "-"
+    _lbl
+
+motorIntraLbl = f_motorIntra(f_tendSigno(tendIntra))
+motorSwingLbl = f_motorSwing(f_tendSigno(tendSwing))
+f_dirPalabra(_signo) => _signo > 0 ? "arriba" : _signo < 0 ? "abajo" : "-"
+motorIntraTxt = motorIntraLbl == "-" ? "sin motor claro" : motorIntraLbl + " manda " + f_dirPalabra(f_tendSigno(tendIntra))
+motorSwingTxt = motorSwingLbl == "-" ? "sin motor claro" : motorSwingLbl + " manda " + f_dirPalabra(f_tendSigno(tendSwing))
+
+// --- CONFIRMACION: marcos MAYORES que confirman / faltan respecto a la tendencia ---
+f_add(_acc, _txt) => _acc == "" ? _txt : _acc + "/" + _txt
+
+f_confIntra(_signo) =>
+    _conf = ""
+    _falta = ""
+    if _signo != 0
+        if f_n0(sg15) == _signo
+            _conf := f_add(_conf, "15m")
+        else
+            _falta := f_add(_falta, "15m")
+        if f_n0(sg30) == _signo
+            _conf := f_add(_conf, "30m")
+        else
+            _falta := f_add(_falta, "30m")
+    _cae = _signo < 0
+    _txt = _signo == 0 ? "sin sesgo" :
+           (_conf != "" ? _conf + (_cae ? " confirma caida" : " confirma subida") : "") +
+           (_conf != "" and _falta != "" ? " | " : "") +
+           (_falta != "" ? "falta " + _falta : "")
+    _txt == "" ? "sin confirmacion" : _txt
+
+f_confSwing(_signo) =>
+    _conf = ""
+    _falta = ""
+    if _signo != 0
+        if f_n0(sg120) == _signo
+            _conf := f_add(_conf, "2H")
+        else
+            _falta := f_add(_falta, "2H")
+        if f_n0(sg240) == _signo
+            _conf := f_add(_conf, "4H")
+        else
+            _falta := f_add(_falta, "4H")
+    _cae = _signo < 0
+    _base = _signo == 0 ? "sin sesgo" :
+            (_conf != "" ? _conf + (_cae ? " confirman caida" : " confirman subida") : "") +
+            (_conf != "" and _falta != "" ? " | " : "") +
+            (_falta != "" ? "falta " + _falta : "")
+    // SWING anade el estado del Diario: a favor / en contra
+    _diario = _signo == 0 ? "" : (f_n0(sgD) == _signo ? " | Diario a favor" : f_n0(sgD) == -_signo ? " | Diario en contra" : " | Diario neutral")
+    (_base == "" ? "sin confirmacion" : _base) + _diario
+
+confIntraTxt = f_confIntra(f_tendSigno(tendIntra))
+confSwingTxt = f_confSwing(f_tendSigno(tendSwing))
+
+// --- LECTURA: frase accionable (tendencia, score) ---
+f_lecturaIntra(_t) =>
+    _l = _t == "ALCISTA"         ? "Largos con tendencia, gestionar riesgo" :
+         _t == "POSIBLE ALCISTA" ? "Buscar largos finos 1m/3m"             :
+         _t == "BAJISTA"         ? "Buscar cortos finos 1m/3m"             :
+         _t == "POSIBLE BAJISTA" ? "Esperar fin de caida"                  :
+         "Sin sesgo: esperar definicion"
+    _l
+f_lecturaSwing(_t) =>
+    _l = _t == "ALCISTA"         ? "Swing alcista confirmado"            :
+         _t == "POSIBLE ALCISTA" ? "Swing alcista en desarrollo"         :
+         _t == "BAJISTA"         ? "Swing bajista: proteger / cortos"    :
+         _t == "POSIBLE BAJISTA" ? "Swing bajista en desarrollo"         :
+         "Rango: esperar ruptura"
+    _l
+lecturaIntraTxt = f_lecturaIntra(tendIntra)
+lecturaSwingTxt = f_lecturaSwing(tendSwing)
+
+// =============================================================================
+// 8) TABLA MULTI-TF (TF . HIST . ESTADO . FUERZA) - SPEC seccion 5
+//    table.new una vez (var), se rellena solo en barstate.islast.
+// =============================================================================
+var table tblTF = table.new(f_pos(posTabla), 4, 11, bgcolor=colFondo, frame_color=color.new(colTenue, 60), frame_width=1, border_color=color.new(colTenue, 80), border_width=1)
+
+// Pinta una fila de la tabla TF
+f_filaTF(_fila, _lblTF, _h, _est, _fz, _bg) =>
+    table.cell(tblTF, 0, _fila, _lblTF,        text_color=colTexto, text_halign=text.align_left,   bgcolor=_bg, text_size=txtSize)
+    table.cell(tblTF, 1, _fila, f_histTxt(_h), text_color=(na(_h) ? colTenue : _h >= 0 ? colAlza : colBaja), text_halign=text.align_right, bgcolor=_bg, text_size=txtSize)
+    table.cell(tblTF, 2, _fila, f_estTxt(_est),text_color=f_estCol(_est), text_halign=text.align_center, bgcolor=_bg, text_size=txtSize)
+    table.cell(tblTF, 3, _fila, f_fzTxt(_fz),  text_color=f_fzCol(_fz),  text_halign=text.align_left,   bgcolor=_bg, text_size=txtSize)
+
+// =============================================================================
+// 9) TABLA RESUMEN INTRADIA / SWING (6 columnas) - SPEC seccion 7
+// =============================================================================
+var table tblRes = table.new(f_pos(posResumen), 6, 3, bgcolor=colFondo, frame_color=color.new(colTenue, 60), frame_width=1, border_color=color.new(colTenue, 80), border_width=1)
+
+f_filaRes(_fila, _marco, _tend, _motor, _conf, _score, _lectura, _bg) =>
+    _colT = f_tendCol(_tend)
+    table.cell(tblRes, 0, _fila, _marco,  text_color=colTexto, text_halign=text.align_left,   bgcolor=_bg, text_size=txtSize)
+    table.cell(tblRes, 1, _fila, _tend,   text_color=_colT,    text_halign=text.align_center, bgcolor=_bg, text_size=txtSize)
+    table.cell(tblRes, 2, _fila, _motor,  text_color=colTexto, text_halign=text.align_left,   bgcolor=_bg, text_size=txtSize)
+    table.cell(tblRes, 3, _fila, _conf,   text_color=colTenue, text_halign=text.align_left,   bgcolor=_bg, text_size=txtSize)
+    table.cell(tblRes, 4, _fila, str.tostring(_score, "#.##"), text_color=(_score > 0 ? colAlza : _score < 0 ? colBaja : colAviso), text_halign=text.align_right, bgcolor=_bg, text_size=txtSize)
+    table.cell(tblRes, 5, _fila, _lectura,text_color=colTexto, text_halign=text.align_left,   bgcolor=_bg, text_size=txtSize)
+
+// =============================================================================
+// 10) RENDER (solo en la ultima barra)
+// =============================================================================
+if barstate.islast
+    // ---- Tabla multi-TF ----
+    if mostrarTF
+        // Cabecera
+        table.cell(tblTF, 0, 0, "TF",     text_color=colTexto, text_halign=text.align_left,   bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblTF, 1, 0, "HIST",   text_color=colTexto, text_halign=text.align_right,  bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblTF, 2, 0, "ESTADO", text_color=colTexto, text_halign=text.align_center, bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblTF, 3, 0, "FUERZA", text_color=colTexto, text_halign=text.align_left,   bgcolor=colCabecera, text_size=txtSize)
+        // Filas (orden fijo) con alternado sutil
+        f_filaTF(1,  "1m",     h1,   est1,   fz1,   colFilaA)
+        f_filaTF(2,  "3m",     h3,   est3,   fz3,   colFilaB)
+        f_filaTF(3,  "5m",     h5,   est5,   fz5,   colFilaA)
+        f_filaTF(4,  "15m",    h15,  est15,  fz15,  colFilaB)
+        f_filaTF(5,  "30m",    h30,  est30,  fz30,  colFilaA)
+        f_filaTF(6,  "1H",     h60,  est60,  fz60,  colFilaB)
+        f_filaTF(7,  "2H",     h120, est120, fz120, colFilaA)
+        f_filaTF(8,  "4H",     h240, est240, fz240, colFilaB)
+        f_filaTF(9,  "Diario", hD,   estD,   fzD,   colFilaA)
+        // Pie: score global MACD
+        _semTxt = scoreGlobal >= 3 ? "VERDE" : scoreGlobal <= -3 ? "ROJO" : "AMARILLO"
+        _semCol = scoreGlobal >= 3 ? colAlza : scoreGlobal <= -3 ? colBaja : colAviso
+        table.cell(tblTF, 0, 10, "GLOBAL", text_color=colTenue, text_halign=text.align_left, bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblTF, 1, 10, str.tostring(scoreGlobal, "#.##"), text_color=_semCol, text_halign=text.align_right, bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblTF, 2, 10, _semTxt, text_color=_semCol, text_halign=text.align_center, bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblTF, 3, 10, "MACD multi-TF", text_color=colTenue, text_halign=text.align_left, bgcolor=colCabecera, text_size=txtSize)
+
+    // ---- Tabla resumen INTRADIA / SWING ----
+    if mostrarRes
+        table.cell(tblRes, 0, 0, "MARCO",        text_color=colTexto, text_halign=text.align_left,   bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblRes, 1, 0, "TENDENCIA",    text_color=colTexto, text_halign=text.align_center, bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblRes, 2, 0, "MOTOR",        text_color=colTexto, text_halign=text.align_left,   bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblRes, 3, 0, "CONFIRMACION", text_color=colTexto, text_halign=text.align_left,   bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblRes, 4, 0, "SCORE",        text_color=colTexto, text_halign=text.align_right,  bgcolor=colCabecera, text_size=txtSize)
+        table.cell(tblRes, 5, 0, "LECTURA",      text_color=colTexto, text_halign=text.align_left,   bgcolor=colCabecera, text_size=txtSize)
+        f_filaRes(1, "INTRADIA", tendIntra, motorIntraTxt, confIntraTxt, scoreIntra, lecturaIntraTxt, colFilaA)
+        f_filaRes(2, "SWING",    tendSwing, motorSwingTxt, confSwingTxt, scoreSwing, lecturaSwingTxt, colFilaB)
