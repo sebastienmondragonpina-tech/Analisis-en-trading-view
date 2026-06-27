@@ -1,0 +1,14 @@
+# Dependencias / artefactos
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secretos (NUNCA subir tus API keys ni tokens)
+.env
+ai-bridge/.env
+
+# Logs y temporales
+*.log
+.DS_Store

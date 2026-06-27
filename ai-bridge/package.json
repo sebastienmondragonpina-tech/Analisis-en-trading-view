@@ -1,0 +1,17 @@
+{
+  "name": "pinescope-ai-bridge",
+  "version": "1.0.0",
+  "description": "Bridge de IA externa para PineScope: recibe el webhook de una alerta de TradingView, llama a una IA (anthropic|openai|gemini) y reenvia el analisis a Telegram.",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "license": "MIT"
+}

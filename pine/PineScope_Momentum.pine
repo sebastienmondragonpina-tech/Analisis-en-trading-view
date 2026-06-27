@@ -1,0 +1,242 @@
+//@version=6
+// =====================================================================================
+//  PineScope — Momentum (panel inferior)   ·  Port nativo de FinScope a Pine Script v6
+// =====================================================================================
+//  Replica el panel "Chris IA MC Master":
+//    1) MACD como HISTOGRAMA con 4 colores (creciente/decreciente x positivo/negativo)
+//       + línea MACD + línea de señal + línea cero.
+//    2) RSI como lectura secundaria (línea tenue + valor en la tabla).
+//    3) Tabla de MOMENTUM por temporalidad (1m,3m,5m,15m,30m,1H,2H,4H,Día) con columnas
+//       TF / HIST / ESTADO / FUERZA, derivada del signo y la pendiente del histograma MACD
+//       de cada marco vía request.security().
+//
+//  Equivalencias con FinScope (JS):
+//    · indicators.js  -> ind.macd(): EMA(12)/EMA(26), señal EMA(9), hist = macd - señal.
+//    · render.js      -> macdChart(): histograma verde si hist>=0, rojo si <0 (aquí afinado
+//                        a 4 tonos como TradingView nativo).
+//    · analysis.js    -> clasificación por dirección/fuerza del momentum por temporalidad.
+//
+//  Pine NO puede llamar a internet ni a una IA: TODA la lógica es cálculo puro sobre OHLCV
+//  + request.security() para la multi-temporalidad. NUNCA se usa lookahead on.
+// =====================================================================================
+
+indicator("PineScope — Momentum", shorttitle="PineScope MOM", overlay=false, precision=2)
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+//  Paleta (igual que el panel de referencia / FinScope)
+// ─────────────────────────────────────────────────────────────────────────────────────
+color C_ALC      = #26A69A                       // alcista
+color C_ALC_SUAVE= color.new(#26A69A, 55)        // alcista apagado (perdiendo fuerza)
+color C_BAJ      = #EF5350                        // bajista
+color C_BAJ_SUAVE= color.new(#EF5350, 55)        // bajista apagado (recuperando fuerza)
+color C_AMBAR    = #E0A800                        // neutral / aviso
+color C_FONDO    = #131722                        // fondo oscuro del panel
+color C_FONDO_2  = #1B2230                        // fondo de celda alterna
+color C_BORDE    = #2A3242                        // borde / rejilla
+color C_TXT      = #C8CEDB                        // texto base
+color C_TXT_TENUE= #8A94A8                        // texto secundario
+color C_MACD     = #4C8DFF                        // línea MACD (azul)
+color C_SENAL    = #F5B94A                        // línea de señal (ámbar)
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+//  Entradas
+// ─────────────────────────────────────────────────────────────────────────────────────
+grpMacd = "MACD"
+int   inFast   = input.int(12, "EMA rápida",  minval=1,                group=grpMacd)
+int   inSlow   = input.int(26, "EMA lenta",   minval=1,                group=grpMacd)
+int   inSignal = input.int(9,  "Señal",       minval=1,                group=grpMacd)
+
+grpRsi = "RSI"
+bool  inMostrarRsi = input.bool(true, "Mostrar línea RSI", group=grpRsi)
+int   inRsiLen     = input.int(14, "Longitud RSI", minval=1, group=grpRsi)
+
+grpTabla = "Tabla de momentum"
+bool   inMostrarTabla = input.bool(true,    "Mostrar tabla",           group=grpTabla)
+string inPosTabla     = input.string("Superior derecha", "Posición", options=["Superior derecha", "Superior izquierda", "Inferior derecha", "Inferior izquierda"], group=grpTabla)
+float  inZonaMuerta   = input.float(0.0, "Zona muerta del histograma", minval=0.0, step=0.001, tooltip="Margen alrededor de 0 para considerar el histograma 'plano' (NEUTRAL). 0 = desactivado.", group=grpTabla)
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+//  MACD del marco ACTUAL (para los plots del panel)
+//  Réplica de ind.macd(): líneas EMA, MACD = ef - es, señal = EMA(MACD, 9), hist = macd - señal.
+// ─────────────────────────────────────────────────────────────────────────────────────
+float lineaMacd  = ta.ema(close, inFast) - ta.ema(close, inSlow)
+float lineaSenal = ta.ema(lineaMacd, inSignal)
+float hist       = lineaMacd - lineaSenal
+float rsi        = ta.rsi(close, inRsiLen)
+
+// Color del histograma con 4 tonos (estilo TradingView nativo):
+//   · positivo creciente -> verde fuerte   · positivo decreciente -> verde apagado
+//   · negativo cayendo    -> rojo fuerte    · negativo subiendo    -> rojo apagado
+colorHist(float h) =>
+    bool crece = h >= nz(h[1])
+    h >= 0 ? (crece ? C_ALC : C_ALC_SUAVE) : (crece ? C_BAJ_SUAVE : C_BAJ)
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+//  Clasificación de momentum (signo + pendiente del histograma) -> ESTADO + FUERZA
+//  Devuelve el texto del estado, su color, y la "fuerza" (4 barras tipo ▰▰▱▱).
+//  Lecturas: IMPULSO ALCISTA SANO / PERDIENDO FUERZA / VIGILAR CRUCE ALCISTA /
+//            RECUPERANDO FUERZA / INICIO ALCISTA / IMPULSO BAJISTA / INICIO BAJISTA.
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+// Texto de estado a partir del histograma actual (h) y el previo (hPrev).
+estadoTxt(float h, float hPrev) =>
+    bool plano = math.abs(h) <= inZonaMuerta
+    bool crece = h > hPrev
+    string txt = na
+    if plano
+        txt := "SIN IMPULSO"
+    else if h > 0 and crece
+        txt := "IMPULSO ALCISTA SANO"
+    else if h > 0 and not crece
+        txt := "PERDIENDO FUERZA"
+    else if h < 0 and crece
+        // negativo pero subiendo hacia cero: el cruce alcista se acerca
+        txt := (h > hPrev and hPrev < 0 and h >= hPrev * 0.5) ? "VIGILAR CRUCE ALCISTA" : "RECUPERANDO FUERZA"
+    else
+        txt := "IMPULSO BAJISTA"
+    txt
+
+// Detecta cruces recientes para los matices "INICIO ALCISTA/BAJISTA".
+estadoConCruce(float h, float hPrev) =>
+    string base = estadoTxt(h, hPrev)
+    // Cruce de cero del histograma en la última vela -> "INICIO" del nuevo impulso.
+    bool cruceArriba = hPrev <= 0 and h > 0
+    bool cruceAbajo  = hPrev >= 0 and h < 0
+    cruceArriba ? "INICIO ALCISTA" : cruceAbajo ? "INICIO BAJISTA" : base
+
+// Color asociado a cada estado.
+colorEstado(string st) =>
+    st == "IMPULSO ALCISTA SANO" or st == "INICIO ALCISTA" ? C_ALC :
+     st == "PERDIENDO FUERZA"     ? C_ALC_SUAVE :
+     st == "RECUPERANDO FUERZA" or st == "VIGILAR CRUCE ALCISTA" ? C_AMBAR :
+     st == "IMPULSO BAJISTA" or st == "INICIO BAJISTA" ? C_BAJ :
+     C_TXT_TENUE
+
+// Barra de "fuerza" (4 segmentos) según magnitud del histograma normalizada por ATR
+// del propio marco (para que sea comparable entre temporalidades y activos).
+fuerzaTxt(float h, float ref) =>
+    float r = ref > 0 ? math.abs(h) / ref : 0.0
+    int n = r >= 0.9 ? 4 : r >= 0.5 ? 3 : r >= 0.2 ? 2 : r > 0.0 ? 1 : 0
+    barras = ""
+    for i = 0 to 3
+        barras := barras + (i < n ? "▰" : "▱")
+    barras
+
+// Flecha/símbolo compacto del signo del histograma para la columna HIST.
+histSimbolo(float h, float hPrev) =>
+    h >= 0 ? (h >= hPrev ? "▲" : "△") : (h <= hPrev ? "▼" : "▽")
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+//  Función de momentum por temporalidad — se evalúa DENTRO de request.security()
+//  Devuelve una tupla con: histograma, histograma previo y una referencia de escala (ATR).
+//  Encapsular el cálculo en una función y pasar SU LLAMADA como 'expr' es el patrón correcto
+//  para multi-TF en Pine v6 (evita repintado y respeta el contexto del símbolo/marco).
+// ─────────────────────────────────────────────────────────────────────────────────────
+calcMomentum() =>
+    float m  = ta.ema(close, inFast) - ta.ema(close, inSlow)
+    float s  = ta.ema(m, inSignal)
+    float h  = m - s
+    float hp = h[1]
+    float a  = ta.atr(14)                         // escala para normalizar la fuerza
+    [h, hp, a]
+
+// Pide a un marco (inferior, igual o superior) el histograma, su previo y la referencia.
+// lookahead OFF SIEMPRE: jamás miramos datos del futuro.
+momentumTF(simple string tf) =>
+    request.security(syminfo.tickerid, tf, calcMomentum(), lookahead=barmerge.lookahead_off)
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+//  PLOTS del panel (marco actual)
+// ─────────────────────────────────────────────────────────────────────────────────────
+plot(0, "Cero", color=color.new(C_BORDE, 0), linewidth=1)
+plot(hist,       "Histograma", color=colorHist(hist), style=plot.style_columns)
+plot(lineaMacd,  "MACD",       color=C_MACD,  linewidth=2)
+plot(lineaSenal, "Señal",      color=C_SENAL, linewidth=2)
+
+// RSI reescalado al rango del MACD para que conviva en el mismo panel sin romper la escala:
+//   RSI 0..100  ->  centrado en 0 y comprimido al span reciente del histograma.
+float spanHist = ta.highest(math.abs(hist), 100)
+float rsiPlot  = inMostrarRsi ? (rsi - 50) / 50 * nz(spanHist, 1) : na
+plot(rsiPlot, "RSI (reescalado)", color=inMostrarRsi ? color.new(#9C7BFF, 35) : na, linewidth=1)
+hline(0, "Eje RSI 50", color=color.new(#9C7BFF, 88), linestyle=hline.style_dotted)
+
+// Marcadores de cruce del histograma por cero (inicio de impulso) en el marco actual.
+plotchar(ta.crossover(hist, 0)  ? hist : na, "Inicio alcista", "▲", location.bottom, color=C_ALC, size=size.tiny)
+plotchar(ta.crossunder(hist, 0) ? hist : na, "Inicio bajista", "▼", location.top,    color=C_BAJ, size=size.tiny)
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+//  TABLA de momentum por temporalidad
+//  Columnas: TF · HIST · ESTADO · FUERZA. Se rellena solo en la última barra.
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+// Temporalidades del panel (igual que la referencia "Chris IA MC Master").
+// Formato de request.security: minutos "1","3","5","15","30","60","120","240"; diario "D".
+var array<string> TF_LABELS = array.from("1m", "3m", "5m", "15m", "30m", "1H", "2H", "4H", "Día")
+
+// Una sola llamada a request.security por temporalidad (cada una devuelve la tupla completa).
+[h1,   hp1,   a1  ] = momentumTF("1")
+[h3,   hp3,   a3  ] = momentumTF("3")
+[h5,   hp5,   a5  ] = momentumTF("5")
+[h15,  hp15,  a15 ] = momentumTF("15")
+[h30,  hp30,  a30 ] = momentumTF("30")
+[h60,  hp60,  a60 ] = momentumTF("60")
+[h120, hp120, a120] = momentumTF("120")
+[h240, hp240, a240] = momentumTF("240")
+[hD,   hpD,   aD  ] = momentumTF("D")
+
+// Empaqueta en arrays para iterar al pintar la tabla. Se recrean cada barra (no 'var')
+// porque sus valores cambian con el cierre; array.from construye el arreglo en una línea.
+array<float> HS  = array.from(h1,   h3,   h5,   h15,  h30,  h60,  h120, h240, hD)
+array<float> HPS = array.from(hp1,  hp3,  hp5,  hp15, hp30, hp60, hp120,hp240,hpD)
+array<float> AS  = array.from(a1,   a3,   a5,   a15,  a30,  a60,  a120, a240, aD)
+
+// Posición de la tabla a partir de la entrada de texto.
+posTabla(string p) =>
+    p == "Superior izquierda" ? position.top_left :
+     p == "Inferior derecha"  ? position.bottom_right :
+     p == "Inferior izquierda"? position.bottom_left :
+     position.top_right
+
+// La tabla se crea una vez (var) y se rellena en la última barra.
+var table tbl = table.new(posTabla(inPosTabla), 4, 11, bgcolor=C_FONDO, frame_color=C_BORDE, frame_width=1, border_color=C_BORDE, border_width=1)
+
+if inMostrarTabla and barstate.islast
+    // Título de la tabla (fila 0, fusiona visualmente con encabezados de color).
+    table.cell(tbl, 0, 0, "MOMENTUM",  text_color=C_TXT,       text_size=size.small, bgcolor=C_FONDO_2)
+    table.cell(tbl, 1, 0, "MACD",      text_color=C_TXT_TENUE, text_size=size.small, bgcolor=C_FONDO_2)
+    table.cell(tbl, 2, 0, "RSI " + str.tostring(rsi, "#"), text_color=C_TXT_TENUE, text_size=size.small, bgcolor=C_FONDO_2)
+    table.cell(tbl, 3, 0, "",          bgcolor=C_FONDO_2)
+
+    // Encabezados de columna (fila 1).
+    table.cell(tbl, 0, 1, "TF",     text_color=C_TXT_TENUE, text_size=size.small, bgcolor=C_BORDE)
+    table.cell(tbl, 1, 1, "HIST",   text_color=C_TXT_TENUE, text_size=size.small, bgcolor=C_BORDE)
+    table.cell(tbl, 2, 1, "ESTADO", text_color=C_TXT_TENUE, text_size=size.small, bgcolor=C_BORDE)
+    table.cell(tbl, 3, 1, "FUERZA", text_color=C_TXT_TENUE, text_size=size.small, bgcolor=C_BORDE)
+
+    // Una fila por temporalidad (filas 2..10).
+    for i = 0 to 8
+        float h   = array.get(HS, i)
+        float hp  = array.get(HPS, i)
+        float a   = array.get(AS, i)
+        string lab = array.get(TF_LABELS, i)
+        int   row  = i + 2
+        color fondo = (i % 2 == 0) ? C_FONDO : C_FONDO_2
+
+        if na(h)
+            // Marco sin datos suficientes (p.ej. intradía en activos sin historial fino).
+            table.cell(tbl, 0, row, lab, text_color=C_TXT,       text_size=size.small, bgcolor=fondo)
+            table.cell(tbl, 1, row, "—", text_color=C_TXT_TENUE, text_size=size.small, bgcolor=fondo)
+            table.cell(tbl, 2, row, "SIN DATOS", text_color=C_TXT_TENUE, text_size=size.small, bgcolor=fondo)
+            table.cell(tbl, 3, row, "▱▱▱▱", text_color=C_TXT_TENUE, text_size=size.small, bgcolor=fondo)
+        else
+            string st  = estadoConCruce(h, hp)
+            color  cSt = colorEstado(st)
+            string sim = histSimbolo(h, hp)
+            string fz  = fuerzaTxt(h, a)
+            // Color del símbolo HIST con el mismo criterio de 4 tonos que el histograma del panel.
+            color cSim = h >= 0 ? (h >= hp ? C_ALC : C_ALC_SUAVE) : (h <= hp ? C_BAJ : C_BAJ_SUAVE)
+
+            table.cell(tbl, 0, row, lab, text_color=C_TXT,  text_size=size.small, bgcolor=fondo)
+            table.cell(tbl, 1, row, sim, text_color=cSim,   text_size=size.small, bgcolor=fondo)
+            table.cell(tbl, 2, row, st,  text_color=cSt,    text_size=size.small, bgcolor=fondo)
+            table.cell(tbl, 3, row, fz,  text_color=cSt,    text_size=size.small, bgcolor=fondo)

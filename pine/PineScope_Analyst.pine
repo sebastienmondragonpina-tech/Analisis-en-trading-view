@@ -1,0 +1,335 @@
+//@version=6
+// =============================================================================
+// PineScope Analyst — port del "motor calculado" de FinScope a Pine Script v6
+// -----------------------------------------------------------------------------
+// Replica la logica de FinScope (analysis.js -> buildCalc + indicators.js):
+//   - RSI(14) Wilder, MACD(12,26,9), EMA rapida/lenta, SMA200, ATR(14) Wilder.
+//   - Score por marco: cruce EMAs + MACD vs senal + precio vs SMA200 + RSI.
+//   - Tabla multi-temporalidad (15m..Mes) con request.security.
+//   - Semaforo verde/amarillo/rojo + veredicto + lectura ejecutiva.
+//   - Soportes/resistencias por pivotes (invariante soporte < precio < resistencia).
+//   - Prediccion POR REGLAS (objetivo de subida y de bajada con ATR + niveles S/R).
+//   - Bridge de IA: alert() con un JSON de una linea (requiere webhook externo).
+//
+// IMPORTANTE: Pine NO puede llamar a internet ni a una IA. Aqui solo se calcula
+// sobre OHLCV. El "bridge" emite un JSON para que un servidor externo (via
+// webhook de la alerta) lo reenvie a una IA. Esto es solo un puente, no IA local.
+// =============================================================================
+
+indicator("PineScope Analyst", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// =============================================================================
+// 1) INPUTS  (activar/desactivar tabla, posicion, longitudes, sensibilidad)
+// =============================================================================
+grpInd  = "Indicadores"
+lenRSI    = input.int(14,  "RSI (longitud)",         minval = 2,  group = grpInd)
+lenEmaF   = input.int(12,  "EMA rapida",             minval = 1,  group = grpInd)
+lenEmaS   = input.int(26,  "EMA lenta",              minval = 1,  group = grpInd)
+macdFast  = input.int(12,  "MACD rapida",            minval = 1,  group = grpInd)
+macdSlow  = input.int(26,  "MACD lenta",             minval = 1,  group = grpInd)
+macdSig   = input.int(9,   "MACD senal",             minval = 1,  group = grpInd)
+lenSma200 = input.int(200, "SMA larga (estructura)", minval = 5,  group = grpInd)
+lenATR    = input.int(14,  "ATR (longitud)",         minval = 2,  group = grpInd)
+
+grpTbl  = "Tabla multi-temporalidad"
+showTable = input.bool(true, "Mostrar tabla", group = grpTbl)
+tblPosIn  = input.string("Arriba derecha", "Posicion de la tabla", options = ["Arriba izquierda", "Arriba derecha", "Abajo izquierda", "Abajo derecha", "Centro derecha"], group = grpTbl)
+
+grpPiv  = "Pivotes (Soporte / Resistencia)"
+showSR    = input.bool(true, "Dibujar soporte/resistencia", group = grpPiv)
+pivLeft   = input.int(10, "Sensibilidad pivote (izquierda)", minval = 1, group = grpPiv)
+pivRight  = input.int(10, "Sensibilidad pivote (derecha)",   minval = 1, group = grpPiv)
+
+grpPred = "Prediccion por reglas"
+showPred  = input.bool(true,  "Mostrar etiqueta de prediccion", group = grpPred)
+atrMult   = input.float(1.5, "Multiplo de ATR para el objetivo", minval = 0.1, step = 0.1, group = grpPred)
+
+grpAI   = "Bridge de IA (webhook)"
+emitAI    = input.bool(false, "Emitir JSON para IA (requiere alerta con webhook)", group = grpAI)
+
+// =============================================================================
+// 2) INDICADORES BASE (en el timeframe del grafico)
+// =============================================================================
+// RSI(14) de Wilder -> ta.rsi ya usa el suavizado de Wilder (RMA), igual que indicators.js.
+rsiV  = ta.rsi(close, lenRSI)
+
+// MACD(12,26,9) -> linea y senal (el histograma no se usa en este overlay).
+[macdLine, signalLine, _] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+// EMAs rapida/lenta (para el cruce) y SMA200 (estructura de largo plazo).
+emaF  = ta.ema(close, lenEmaF)
+emaS  = ta.ema(close, lenEmaS)
+sma200 = ta.sma(close, lenSma200)
+
+// ATR(14) de Wilder.
+atrV  = ta.atr(lenATR)
+
+// =============================================================================
+// 3) MOTOR DE SCORE POR MARCO  (mismo espiritu que analysis.js)
+// -----------------------------------------------------------------------------
+// Combina 4 senales en un score [-4..+4]:
+//   +1/-1  cruce EMAs (emaF vs emaS)
+//   +1/-1  MACD vs senal
+//   +1/-1  precio vs SMA200 (estructura de largo plazo)
+//   +1/-1  RSI > 55 (impulso alcista) / RSI < 45 (impulso bajista)
+// Salida: ESTADO (ALCISTA/BAJISTA/NEUTRAL) + FUERZA (FUERTE/normal/EQUILIBRIO).
+// =============================================================================
+
+// Funcion encapsulada: devuelve el score del marco.
+// Se pasa como 'expr' dentro de request.security para reusarla en cada temporalidad.
+f_signals() =>
+    _ema   = ta.ema(close, lenEmaF) > ta.ema(close, lenEmaS) ? 1 : -1
+    [_m, _s, _] = ta.macd(close, macdFast, macdSlow, macdSig)
+    _macd  = _m > _s ? 1 : -1
+    _trend = close > ta.sma(close, lenSma200) ? 1 : -1
+    _rsi   = ta.rsi(close, lenRSI)
+    _rsiSc = _rsi > 55 ? 1 : _rsi < 45 ? -1 : 0
+    _ema + _macd + _trend + _rsiSc
+
+// Traduce un score a ESTADO + FUERZA.
+// |score| >= 3 -> FUERTE ; score == 0 -> EQUILIBRIO ; resto -> normal.
+f_estado(_score) =>
+    _score > 0 ? "ALCISTA" : _score < 0 ? "BAJISTA" : "NEUTRAL"
+
+f_fuerza(_score) =>
+    _a = math.abs(_score)
+    _a >= 3 ? "FUERTE" : _score == 0 ? "EQUILIBRIO" : "normal"
+
+// =============================================================================
+// 4) MULTI-TEMPORALIDAD  (15m, 30m, 1H, 2H, 4H, Dia, Semana, Mes)
+// -----------------------------------------------------------------------------
+// Se encapsulan las senales en f_signals() y se pasa esa llamada como 'expr' de
+// request.security. lookahead SIEMPRE off (nunca lookahead_on -> repaint/sesgo).
+// =============================================================================
+f_tf(_tf) =>
+    request.security(syminfo.tickerid, _tf, f_signals(), lookahead = barmerge.lookahead_off)
+
+sc15  = f_tf("15")
+sc30  = f_tf("30")
+sc60  = f_tf("60")
+sc120 = f_tf("120")
+sc240 = f_tf("240")
+scD   = f_tf("D")
+scW   = f_tf("W")
+scM   = f_tf("M")
+
+// Conteo de tendencia dominante entre los 8 marcos (NEUTRAL no cuenta), como en analysis.js.
+f_isAlc(_sc) => _sc > 0 ? 1 : 0
+f_isBaj(_sc) => _sc < 0 ? 1 : 0
+nAlc = f_isAlc(sc15) + f_isAlc(sc30) + f_isAlc(sc60) + f_isAlc(sc120) + f_isAlc(sc240) + f_isAlc(scD) + f_isAlc(scW) + f_isAlc(scM)
+nBaj = f_isBaj(sc15) + f_isBaj(sc30) + f_isBaj(sc60) + f_isBaj(sc120) + f_isBaj(sc240) + f_isBaj(scD) + f_isBaj(scW) + f_isBaj(scM)
+nVal = nAlc + nBaj
+domTrend = nVal == 0 ? "NEUTRAL" : nBaj > nAlc ? "BAJISTA" : nAlc > nBaj ? "ALCISTA" : "NEUTRAL"
+domCount = math.max(nAlc, nBaj)
+
+// =============================================================================
+// 5) SOPORTES / RESISTENCIAS POR PIVOTES
+// -----------------------------------------------------------------------------
+// ta.pivothigh / ta.pivotlow detectan swing highs/lows. Mantenemos el ultimo
+// pivote ALTO por encima del precio (resistencia) y el ultimo pivote BAJO por
+// debajo (soporte). Invariante de FinScope: soporte < precio < resistencia.
+// =============================================================================
+ph = ta.pivothigh(high, pivLeft, pivRight)
+pl = ta.pivotlow(low,  pivLeft, pivRight)
+
+var float resLevel = na
+var float supLevel = na
+
+// Solo actualizamos si el pivote respeta la invariante respecto al precio actual.
+if not na(ph) and (na(close) or ph > close)
+    resLevel := ph
+if not na(pl) and (na(close) or pl < close)
+    supLevel := pl
+
+// Si el precio ya supero el nivel guardado, deja de ser valido (invierte el lado): lo limpiamos.
+if not na(resLevel) and close >= resLevel
+    resLevel := na
+if not na(supLevel) and close <= supLevel
+    supLevel := na
+
+// Dibujo: lineas extendidas a la derecha, redibujadas en la ultima barra.
+var line resLine = na
+var line supLine = na
+var label resLbl = na
+var label supLbl = na
+
+if barstate.islast and showSR
+    line.delete(resLine)
+    line.delete(supLine)
+    label.delete(resLbl)
+    label.delete(supLbl)
+    if not na(resLevel)
+        resLine := line.new(bar_index - 1, resLevel, bar_index, resLevel, extend = extend.right, color = color.new(#EF5350, 0), width = 2, style = line.style_dashed)
+        resLbl  := label.new(bar_index, resLevel, "Resistencia " + str.tostring(resLevel, format.mintick), style = label.style_label_left, textcolor = color.white, color = color.new(#EF5350, 20), size = size.small)
+    if not na(supLevel)
+        supLine := line.new(bar_index - 1, supLevel, bar_index, supLevel, extend = extend.right, color = color.new(#26A69A, 0), width = 2, style = line.style_dashed)
+        supLbl  := label.new(bar_index, supLevel, "Soporte " + str.tostring(supLevel, format.mintick), style = label.style_label_left, textcolor = color.white, color = color.new(#26A69A, 20), size = size.small)
+
+// =============================================================================
+// 6) SEMAFORO + VEREDICTO + LECTURA EJECUTIVA  (port de buildCalc)
+// -----------------------------------------------------------------------------
+// Semaforo:
+//   ALCISTA -> verde (amarillo si RSI > 70, sobrecomprada)
+//   BAJISTA -> rojo  (amarillo si RSI < 30, sobrevendida)
+//   NEUTRAL -> amarillo
+// El RSI de referencia es el del marco actual del grafico (rsiV).
+// =============================================================================
+sobreSma   = not na(sma200) and close >= sma200
+macdAlcista = macdLine > signalLine
+
+semaforo = domTrend == "ALCISTA" ? (rsiV > 70 ? "amarillo" : "verde") : domTrend == "BAJISTA" ? (rsiV < 30 ? "amarillo" : "rojo") : "amarillo"
+
+// Veredicto (mismas ramas que analysis.js).
+veredicto = domTrend == "BAJISTA" and rsiV < 35 ? "TECNICO BAJISTA PERO SOBREVENDIDA - PARA VIGILAR" : domTrend == "ALCISTA" and rsiV > 65 ? "TECNICO ALCISTA PERO SOBRECOMPRADA - TOMAR CON CALMA" : "TENDENCIA " + domTrend + " - " + (close >= close[1] ? "MOMENTO VERDE" : "MOMENTO ROJO")
+
+// Detalle de tendencia (como trendDetail).
+trendDetail = nVal == 0 ? "Sin datos suficientes." : domTrend == "NEUTRAL" ? "Mixto: " + str.tostring(nAlc) + " alcista(s) vs " + str.tostring(nBaj) + " bajista(s) de " + str.tostring(nVal) + "." : domTrend + " en " + str.tostring(domCount) + "/" + str.tostring(nVal) + " temporalidades."
+
+// Lectura ejecutiva (RSI, MACD alcista/bajista, vs SMA200).
+lectRSI  = "RSI " + str.tostring(rsiV, "#.#") + " - " + (rsiV < 30 ? "sobrevendida" : rsiV > 70 ? "sobrecomprada" : "zona neutral")
+lectMACD = "MACD " + (macdAlcista ? "alcista" : "bajista") + " (" + str.tostring(macdLine, format.mintick) + " vs " + str.tostring(signalLine, format.mintick) + ")"
+lectSMA  = (sobreSma ? "Por encima" : "Por debajo") + " de la SMA" + str.tostring(lenSma200) + " (" + (sobreSma ? "estructura alcista de largo plazo" : "estructura bajista de largo plazo") + ")"
+
+// Color del semaforo para los dibujos.
+colSem = semaforo == "verde" ? #26A69A : semaforo == "rojo" ? #EF5350 : #E0A800
+
+// =============================================================================
+// 7) PREDICCION POR REGLAS  (objetivo de SUBIDA y de BAJADA, sin IA)
+// -----------------------------------------------------------------------------
+// objetivoSube = resistencia mas cercana; si no hay -> precio + atrMult*ATR.
+// objetivoBaja = soporte mas cercano;     si no hay -> precio - atrMult*ATR.
+// Igual espiritu que la tarjeta Prediccion de FinScope v0.9.7 (ATR + niveles S/R).
+// =============================================================================
+objetivoSube = not na(resLevel) ? resLevel : close + atrMult * atrV
+objetivoBaja = not na(supLevel) ? supLevel : close - atrMult * atrV
+
+predDir = domTrend == "ALCISTA" ? "PROBABLE SUBIDA" : domTrend == "BAJISTA" ? "PROBABLE BAJADA" : "LATERAL / INCIERTO"
+predArrow = domTrend == "ALCISTA" ? "▲" : domTrend == "BAJISTA" ? "▼" : "•"
+
+var label predLbl = na
+if barstate.islast and showPred
+    label.delete(predLbl)
+    // El cuerpo incluye la lectura ejecutiva (RSI, MACD, vs SMA200) y el veredicto,
+    // igual que la tarjeta calculada de FinScope (buildCalc).
+    _txt = predArrow + " " + predDir + "\n" +
+           "Veredicto: " + veredicto + "\n" +
+           trendDetail + "\n" +
+           lectRSI + "\n" +
+           lectMACD + "\n" +
+           lectSMA + "\n" +
+           "Si sube -> " + str.tostring(objetivoSube, format.mintick) + "\n" +
+           "Si baja -> " + str.tostring(objetivoBaja, format.mintick) + "\n" +
+           "Orientativa: PUEDE FALLAR. No es recomendacion."
+    predLbl := label.new(bar_index, high, _txt, style = label.style_label_lower_right, textcolor = color.white, color = color.new(colSem, 15), size = size.normal)
+
+// =============================================================================
+// 8) TABLA MULTI-TEMPORALIDAD  (columnas TF / ESTADO / FUERZA)
+// -----------------------------------------------------------------------------
+// table.new + table.cell, rellenada solo en barstate.islast. Colores por estado.
+// =============================================================================
+f_pos(_s) =>
+    _s == "Arriba izquierda" ? position.top_left : _s == "Arriba derecha" ? position.top_right : _s == "Abajo izquierda" ? position.bottom_left : _s == "Abajo derecha" ? position.bottom_right : position.middle_right
+
+// Color de fondo de celda por ESTADO.
+f_bg(_sc) =>
+    _sc > 0 ? color.new(#26A69A, 78) : _sc < 0 ? color.new(#EF5350, 78) : color.new(#E0A800, 80)
+
+f_fg(_sc) =>
+    _sc > 0 ? #26A69A : _sc < 0 ? #EF5350 : #E0A800
+
+var table tbl = na
+
+if showTable and barstate.islast
+    tbl := table.new(f_pos(tblPosIn), 3, 10, bgcolor = color.new(#0E1116, 8), frame_color = color.new(#2A3242, 30), frame_width = 1, border_color = color.new(#2A3242, 60), border_width = 1)
+
+    // Encabezado.
+    table.cell(tbl, 0, 0, "TF",     text_color = #8A94A8, text_size = size.small, bgcolor = color.new(#161A22, 0))
+    table.cell(tbl, 1, 0, "ESTADO", text_color = #8A94A8, text_size = size.small, bgcolor = color.new(#161A22, 0))
+    table.cell(tbl, 2, 0, "FUERZA", text_color = #8A94A8, text_size = size.small, bgcolor = color.new(#161A22, 0))
+
+    // Helper-less: rellenamos fila por fila (Pine no permite cerrar sobre table.cell en funcion con var table).
+    // Fila 15m
+    table.cell(tbl, 0, 1, "15m", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 1, f_estado(sc15), text_color = f_fg(sc15), text_size = size.small, bgcolor = f_bg(sc15))
+    table.cell(tbl, 2, 1, f_fuerza(sc15), text_color = f_fg(sc15), text_size = size.small, bgcolor = f_bg(sc15))
+    // Fila 30m
+    table.cell(tbl, 0, 2, "30m", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 2, f_estado(sc30), text_color = f_fg(sc30), text_size = size.small, bgcolor = f_bg(sc30))
+    table.cell(tbl, 2, 2, f_fuerza(sc30), text_color = f_fg(sc30), text_size = size.small, bgcolor = f_bg(sc30))
+    // Fila 1H
+    table.cell(tbl, 0, 3, "1H", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 3, f_estado(sc60), text_color = f_fg(sc60), text_size = size.small, bgcolor = f_bg(sc60))
+    table.cell(tbl, 2, 3, f_fuerza(sc60), text_color = f_fg(sc60), text_size = size.small, bgcolor = f_bg(sc60))
+    // Fila 2H
+    table.cell(tbl, 0, 4, "2H", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 4, f_estado(sc120), text_color = f_fg(sc120), text_size = size.small, bgcolor = f_bg(sc120))
+    table.cell(tbl, 2, 4, f_fuerza(sc120), text_color = f_fg(sc120), text_size = size.small, bgcolor = f_bg(sc120))
+    // Fila 4H
+    table.cell(tbl, 0, 5, "4H", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 5, f_estado(sc240), text_color = f_fg(sc240), text_size = size.small, bgcolor = f_bg(sc240))
+    table.cell(tbl, 2, 5, f_fuerza(sc240), text_color = f_fg(sc240), text_size = size.small, bgcolor = f_bg(sc240))
+    // Fila Dia
+    table.cell(tbl, 0, 6, "Dia", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 6, f_estado(scD), text_color = f_fg(scD), text_size = size.small, bgcolor = f_bg(scD))
+    table.cell(tbl, 2, 6, f_fuerza(scD), text_color = f_fg(scD), text_size = size.small, bgcolor = f_bg(scD))
+    // Fila Semana
+    table.cell(tbl, 0, 7, "Semana", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 7, f_estado(scW), text_color = f_fg(scW), text_size = size.small, bgcolor = f_bg(scW))
+    table.cell(tbl, 2, 7, f_fuerza(scW), text_color = f_fg(scW), text_size = size.small, bgcolor = f_bg(scW))
+    // Fila Mes
+    table.cell(tbl, 0, 8, "Mes", text_color = #C7CEDB, text_size = size.small)
+    table.cell(tbl, 1, 8, f_estado(scM), text_color = f_fg(scM), text_size = size.small, bgcolor = f_bg(scM))
+    table.cell(tbl, 2, 8, f_fuerza(scM), text_color = f_fg(scM), text_size = size.small, bgcolor = f_bg(scM))
+
+    // Fila resumen: semaforo + veredicto compacto.
+    _semTxt = semaforo == "verde" ? "VERDE" : semaforo == "rojo" ? "ROJO" : "AMARILLO"
+    table.cell(tbl, 0, 9, "Sem.", text_color = #8A94A8, text_size = size.small, bgcolor = color.new(#161A22, 0))
+    table.cell(tbl, 1, 9, _semTxt, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    table.cell(tbl, 2, 9, str.tostring(domCount) + "/" + str.tostring(nVal), text_color = #C7CEDB, text_size = size.small, bgcolor = color.new(#161A22, 0))
+
+// =============================================================================
+// 9) PLOTS DE CONTEXTO  (sobre el grafico de precio)
+// =============================================================================
+plot(emaF,   "EMA rapida", color = color.new(#4C8DFF, 0), linewidth = 1)
+plot(emaS,   "EMA lenta",  color = color.new(#E0A800, 0), linewidth = 1)
+plot(sma200, "SMA larga",  color = color.new(#8A94A8, 0), linewidth = 2)
+
+// =============================================================================
+// 10) BRIDGE DE IA  (JSON de una sola linea via alert)
+// -----------------------------------------------------------------------------
+// Construye un JSON compacto con str.tostring(...) y lo emite con alert() en el
+// cierre de cada vela (alert.freq_once_per_bar_close). Un servidor externo, a
+// traves de una ALERTA CON WEBHOOK en TradingView, puede recibirlo y mandarlo a
+// una IA. Pine NO llama a la IA: esto es solo el puente.
+//
+// Para activarlo: pon el input "Emitir JSON para IA" en true, crea una alerta
+// sobre este indicador con condicion "Any alert() function call" y configura la
+// URL del webhook hacia tu servidor.
+// =============================================================================
+// Resumen multi-TF compacto (estado por marco) para que la IA tenga contexto.
+multiTF = "15m:" + f_estado(sc15) + ",30m:" + f_estado(sc30) + ",1H:" + f_estado(sc60) + ",2H:" + f_estado(sc120) + ",4H:" + f_estado(sc240) + ",D:" + f_estado(scD) + ",W:" + f_estado(scW) + ",M:" + f_estado(scM)
+
+if emitAI and barstate.isconfirmed
+    jsonMsg = '{' +
+       '"symbol":"'      + syminfo.ticker + '",' +
+       '"tf":"'          + timeframe.period + '",' +
+       '"price":'        + str.tostring(close, format.mintick) + ',' +
+       '"semaforo":"'    + semaforo + '",' +
+       '"score":'        + str.tostring(scD) + ',' +
+       '"rsi":'          + str.tostring(rsiV, "#.##") + ',' +
+       '"macd":'         + str.tostring(macdLine, format.mintick) + ',' +
+       '"soporte":'      + (na(supLevel) ? "null" : str.tostring(supLevel, format.mintick)) + ',' +
+       '"resistencia":'  + (na(resLevel) ? "null" : str.tostring(resLevel, format.mintick)) + ',' +
+       '"objetivoSube":' + str.tostring(objetivoSube, format.mintick) + ',' +
+       '"objetivoBaja":' + str.tostring(objetivoBaja, format.mintick) + ',' +
+       '"multiTF":"'     + multiTF + '"' +
+       '}'
+    alert(jsonMsg, alert.freq_once_per_bar_close)
+
+// =============================================================================
+// 11) ALERTAS LEGIBLES (opcional, ademas del bridge JSON)
+// -----------------------------------------------------------------------------
+// Disponibles en el dialogo de alertas como condiciones predefinidas.
+// =============================================================================
+alertcondition(ta.crossover(emaF, emaS),  "Cruce alcista EMAs",  "PineScope: cruce ALCISTA de EMAs")
+alertcondition(ta.crossunder(emaF, emaS), "Cruce bajista EMAs",  "PineScope: cruce BAJISTA de EMAs")

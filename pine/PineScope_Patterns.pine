@@ -1,0 +1,236 @@
+//@version=6
+// =====================================================================================
+//  PineScope · Patrones de velas japonesas (overlay)
+//  Port nativo del componente de patrones de la extension FinScope.
+//
+//  Marco de la skill "velas-japonesas":  TENDENCIA + NIVEL + SENAL
+//    1) TENDENCIA: estructura del mercado (alcista / bajista / rango) en el grafico.
+//    2) NIVEL: soportes y resistencias por pivotes (S/R) como contexto.
+//    3) SENAL: un patron de vela SOLO se marca como valido si concuerda con la
+//       tendencia/nivel (ej. martillo en soporte tras una caida = alcista valido).
+//
+//  Un patron aislado NO se opera: aqui los patrones a-contexto se atenuan (gris) y
+//  solo los que confirman tendencia+nivel se pintan en verde (alcista) o rojo (bajista).
+// =====================================================================================
+
+indicator("PineScope · Patrones de velas", shorttitle="PineScope Patrones", overlay=true, max_labels_count=500, max_lines_count=20)
+
+// ----------------------------------- Paleta -----------------------------------------
+// Estilo visual heredado de FinScope / TradingView.
+color C_ALCISTA = #26A69A   // verde alcista
+color C_BAJISTA = #EF5350   // rojo bajista
+color C_NEUTRAL = #E0A800   // ambar (aviso / indecision / patron a-contexto)
+color C_SR_RES  = color.new(#EF5350, 0)   // resistencia
+color C_SR_SOP  = color.new(#26A69A, 0)   // soporte
+color C_TEXTO   = #ECEFF1   // texto claro sobre fondo oscuro
+
+// ----------------------------------- Inputs -----------------------------------------
+// Familias de patrones (activar / desactivar cada una).
+grpFam = "Familias de patrones"
+inMartillo   = input.bool(true,  "Martillo / Martillo invertido",           group=grpFam)
+inEstrellas1 = input.bool(true,  "Estrella fugaz / Hombre colgado",         group=grpFam)
+inEnvolvente = input.bool(true,  "Envolvente alcista / bajista",            group=grpFam)
+inDoji       = input.bool(true,  "Doji",                                    group=grpFam)
+inEstrella3  = input.bool(true,  "Estrella de la manana / de la tarde",     group=grpFam)
+inHarami     = input.bool(true,  "Harami alcista / bajista",                group=grpFam)
+
+// Filtro de contexto (Tendencia + Nivel).
+grpCtx = "Contexto (Tendencia + Nivel)"
+soloValidos  = input.bool(false, "Mostrar solo senales validas con el contexto", group=grpCtx, tooltip="Si esta activo, oculta los patrones que NO concuerdan con tendencia/nivel (los aislados).")
+emaTendLen   = input.int(50, "EMA de tendencia (sesgo de fondo)", minval=5, maxval=400, group=grpCtx)
+pivLen       = input.int(5,  "Fuerza del pivote S/R",            minval=2, maxval=30, group=grpCtx, tooltip="Velas a cada lado para confirmar un swing high/low (Nivel).")
+zonaSRpct    = input.float(1.5, "Cercania a S/R para validar (% ATR)", minval=0.1, maxval=10, step=0.1, group=grpCtx, tooltip="Tolerancia, en multiplos de ATR, para considerar que la vela esta 'en' el soporte/resistencia.")
+
+// Parametros de forma de las velas.
+grpForma = "Forma de las velas"
+mechaRatio   = input.float(2.0, "Mecha larga >= N x cuerpo (pin bar)", minval=1.0, maxval=5.0, step=0.1, group=grpForma)
+dojiBodyPct  = input.float(5.0, "Doji: cuerpo <= % del rango total",   minval=0.5, maxval=20, step=0.5, group=grpForma)
+mostrarSR    = input.bool(true, "Dibujar soportes / resistencias (Nivel)", group=grpForma)
+
+// ------------------------------ Medidas de la vela ----------------------------------
+cuerpo      = math.abs(close - open)                 // tamano del cuerpo real
+rango       = high - low                             // rango total de la vela
+mechaSup    = high - math.max(open, close)           // mecha superior
+mechaInf    = math.min(open, close) - low            // mecha inferior
+esAlcista   = close > open
+esBajista   = close < open
+atr         = ta.atr(14)
+cuerpoMedio = ta.sma(cuerpo, 14)                     // cuerpo "tipico" reciente
+
+// Evita division por cero en velas planas.
+rangoSeguro = rango > 0 ? rango : syminfo.mintick
+
+// ------------------------------ 1) TENDENCIA ----------------------------------------
+// Sesgo de fondo con EMA (la skill usa medias como soporte/resistencia dinamico y la
+// estructura HH/HL vs LH/LL). Aproximamos la estructura con: precio vs EMA + pendiente.
+emaTend   = ta.ema(close, emaTendLen)
+pendiente = emaTend - emaTend[3]
+tendAlcista = close > emaTend and pendiente > 0      // estructura alcista de fondo
+tendBajista = close < emaTend and pendiente < 0      // estructura bajista de fondo
+
+// "Tras una caida / tras una subida": contexto inmediato del patron (impulso previo).
+trasCaida  = close[1] < close[4]                     // venia bajando antes del patron
+trasSubida = close[1] > close[4]                     // venia subiendo antes del patron
+
+// ------------------------------ 2) NIVEL (S/R) --------------------------------------
+// Soportes / resistencias por pivotes (swing highs/lows), igual idea que
+// ind.supportResistance de FinScope. ta.pivothigh/low confirman con 'pivLen' velas.
+ph = ta.pivothigh(high, pivLen, pivLen)
+pl = ta.pivotlow(low,  pivLen, pivLen)
+
+// Guarda el ultimo nivel de resistencia / soporte confirmado (persisten con 'var').
+var float resistencia = na
+var float soporte     = na
+if not na(ph)
+    resistencia := ph
+if not na(pl)
+    soporte := pl
+
+// "En el nivel": la vela toca/roza el soporte o la resistencia (tolerancia por ATR).
+tol       = atr * zonaSRpct
+enSoporte    = not na(soporte)     and (low  <= soporte + tol)     and (low  >= soporte - tol)
+enResistencia = not na(resistencia) and (high >= resistencia - tol) and (high <= resistencia + tol)
+
+// ------------------------------ 3) SENALES (patrones) -------------------------------
+// Cada patron define su forma; el sesgo "valido" se decide combinando con contexto.
+
+// --- Martillo (pin bar alcista): cuerpo arriba, mecha inferior larga, poca superior ---
+esMartillo = inMartillo and mechaInf >= mechaRatio * cuerpo and mechaSup <= cuerpo and cuerpo > 0
+
+// --- Martillo invertido: cuerpo abajo, mecha superior larga, poca inferior (en fondo) ---
+esMartilloInv = inMartillo and mechaSup >= mechaRatio * cuerpo and mechaInf <= cuerpo and cuerpo > 0
+
+// --- Estrella fugaz (pin bar bajista): igual forma que martillo invertido, pero en techo ---
+//   y --- Hombre colgado: igual forma que martillo, pero en techo de tendencia alcista ---
+esFormaPinSup = inEstrellas1 and mechaSup >= mechaRatio * cuerpo and mechaInf <= cuerpo and cuerpo > 0  // estrella fugaz
+esFormaPinInf = inEstrellas1 and mechaInf >= mechaRatio * cuerpo and mechaSup <= cuerpo and cuerpo > 0  // hombre colgado
+
+// --- Doji: apertura ~ cierre (cuerpo casi inexistente respecto al rango) ---
+esDoji = inDoji and (cuerpo <= rangoSeguro * dojiBodyPct / 100.0)
+
+// --- Envolvente (engulfing): 2 cuerpos opuestos, el 2o envuelve por completo al 1o ---
+cuerpoEnvuelve = math.max(open, close) >= math.max(open[1], close[1]) and math.min(open, close) <= math.min(open[1], close[1])
+envAlcista = inEnvolvente and esAlcista and close[1] < open[1] and cuerpoEnvuelve and cuerpo > cuerpo[1]
+envBajista = inEnvolvente and esBajista and close[1] > open[1] and cuerpoEnvuelve and cuerpo > cuerpo[1]
+
+// --- Harami: vela madre grande + bebe pequeno dentro del cuerpo de la madre ---
+madreGrande = cuerpo[1] >= cuerpoMedio[1]
+bebeDentro  = math.max(open, close) <= math.max(open[1], close[1]) and math.min(open, close) >= math.min(open[1], close[1]) and cuerpo < cuerpo[1]
+haramiAlc = inHarami and close[1] < open[1] and esAlcista and madreGrande and bebeDentro   // madre bajista, bebe alcista
+haramiBaj = inHarami and close[1] > open[1] and esBajista and madreGrande and bebeDentro   // madre alcista, bebe bajista
+
+// --- Estrella de la manana (3 velas, alcista) ---
+//   (1) bajista grande, (2) cuerpo pequeno de indecision, (3) alcista que cierra
+//       por encima del punto medio del cuerpo de la 1a.
+v1Baj    = close[2] < open[2] and cuerpo[2] >= cuerpoMedio[2]
+v2Peque  = cuerpo[1] <= cuerpo[2] * 0.5
+v3Alc    = esAlcista and close > (open[2] + close[2]) / 2
+estManana = inEstrella3 and v1Baj and v2Peque and v3Alc
+
+// --- Estrella de la tarde (3 velas, bajista) — version espejo ---
+v1Alc    = close[2] > open[2] and cuerpo[2] >= cuerpoMedio[2]
+v3Baj    = esBajista and close < (open[2] + close[2]) / 2
+estTarde  = inEstrella3 and v1Alc and v2Peque and v3Baj
+
+// ----------------------- Validacion por contexto (Tendencia + Nivel) ----------------
+// 'valido' = el patron concuerda con su contexto -> color fuerte verde/rojo.
+// Si no concuerda (patron aislado) -> ambar atenuado (y opcionalmente oculto).
+
+// Martillo: alcista valido en FONDO -> tras caida y/o en soporte (estructura no-alcista).
+martilloValido = (trasCaida or enSoporte) and not tendAlcista
+// Martillo invertido: reversion alcista en fondo (mismo contexto que el martillo).
+martInvValido  = (trasCaida or enSoporte) and not tendAlcista
+
+// Estrella fugaz: bajista valida en TECHO -> tras subida y/o en resistencia.
+fugazValida    = (trasSubida or enResistencia) and not tendBajista
+// Hombre colgado: bajista valido en techo de tendencia alcista.
+colgadoValido  = (trasSubida or enResistencia) and tendAlcista
+
+// Envolventes: alcista en fondo bajista / a favor en alcista; bajista en techo alcista.
+envAlcValido = (trasCaida or enSoporte) and not tendAlcista
+envBajValido = (trasSubida or enResistencia) and not tendBajista
+
+// Harami: reversion en extremos (alcista en fondo, bajista en techo).
+haramiAlcValido = (trasCaida or enSoporte) and not tendAlcista
+haramiBajValido = (trasSubida or enResistencia) and not tendBajista
+
+// Estrellas de 3 velas: ya incorporan la estructura; refuerzan con nivel/impulso.
+manValido   = (trasCaida or enSoporte)
+tardeValido = (trasSubida or enResistencia)
+
+// Doji: solo es aviso de giro en techo/fondo; nunca se considera senal direccional fuerte.
+dojiEnExtremo = enSoporte or enResistencia or trasCaida or trasSubida
+
+// ------------------------------ Dibujo de S/R (Nivel) -------------------------------
+// Lineas de soporte/resistencia como contexto visual (se redibujan con cada pivote).
+var line lnRes = na
+var line lnSop = na
+if mostrarSR and barstate.islast
+    if not na(resistencia)
+        line.delete(lnRes)
+        lnRes := line.new(bar_index - 50, resistencia, bar_index, resistencia, color=C_SR_RES, style=line.style_dashed, width=1, extend=extend.right)
+    if not na(soporte)
+        line.delete(lnSop)
+        lnSop := line.new(bar_index - 50, soporte, bar_index, soporte, color=C_SR_SOP, style=line.style_dashed, width=1, extend=extend.right)
+
+// ------------------------------ Pintar las etiquetas --------------------------------
+// Helper: pinta una etiqueta de patron.
+//   sesgoAlc=true  -> debajo de la vela (senal alcista, verde)
+//   sesgoAlc=false -> encima de la vela (senal bajista, rojo)
+//   valido=false   -> ambar atenuado (patron aislado, sin contexto)
+pintar(bool cond, bool sesgoAlc, bool valido, string txt) =>
+    if cond and (valido or not soloValidos)
+        col = not valido ? C_NEUTRAL : (sesgoAlc ? C_ALCISTA : C_BAJISTA)
+        est = sesgoAlc ? label.style_label_up : label.style_label_down
+        ypos = sesgoAlc ? low - atr * 0.5 : high + atr * 0.5
+        sufijo = valido ? "" : " (sin contexto)"
+        label.new(bar_index, ypos, txt + sufijo, style=est, color=col, textcolor=C_TEXTO, size=size.small)
+
+// --- Familia: Martillo / Martillo invertido (sesgo alcista, en fondo) ---
+pintar(esMartillo,    true, martilloValido, "Martillo ▲")
+pintar(esMartilloInv, true, martInvValido,  "Martillo inv. ▲")
+
+// --- Familia: Estrella fugaz / Hombre colgado (sesgo bajista, en techo) ---
+//   La misma forma de pin: arriba (mecha superior) = estrella fugaz / hombre colgado.
+//   Distinguimos por la tendencia de fondo para el nombre.
+pintar(esFormaPinSup and not tendAlcista, false, fugazValida,   "Estrella fugaz ▼")
+pintar(esFormaPinSup and tendAlcista,     false, colgadoValido, "Hombre colgado ▼")
+//   Pin con mecha inferior en techo de tendencia alcista = hombre colgado (forma de martillo arriba).
+pintar(esFormaPinInf and tendAlcista,     false, colgadoValido, "Hombre colgado ▼")
+
+// --- Familia: Envolventes ---
+pintar(envAlcista, true,  envAlcValido, "Envolvente ▲")
+pintar(envBajista, false, envBajValido, "Envolvente ▼")
+
+// --- Familia: Doji (aviso de indecision; ambar salvo confluencia clara de extremo) ---
+//   Doji en soporte tras caida -> sesgo alcista; en resistencia tras subida -> bajista.
+dojiAlc = esDoji and (enSoporte or (trasCaida and not tendAlcista))
+dojiBaj = esDoji and (enResistencia or (trasSubida and not tendBajista))
+pintar(dojiAlc and not dojiBaj, true,  dojiEnExtremo, "Doji ◇")
+pintar(dojiBaj and not dojiAlc, false, dojiEnExtremo, "Doji ◇")
+//   Doji sin extremo (pura indecision): ambar neutro encima de la vela.
+if esDoji and not dojiAlc and not dojiBaj and not soloValidos
+    label.new(bar_index, high + atr * 0.5, "Doji ◇", style=label.style_label_down, color=C_NEUTRAL, textcolor=C_TEXTO, size=size.small)
+
+// --- Familia: Estrellas de 3 velas ---
+pintar(estManana, true,  manValido,   "Estrella manana ★▲")
+pintar(estTarde,  false, tardeValido, "Estrella tarde ★▼")
+
+// --- Familia: Harami ---
+pintar(haramiAlc, true,  haramiAlcValido, "Harami ▲")
+pintar(haramiBaj, false, haramiBajValido, "Harami ▼")
+
+// ------------------------------ Panel resumen (Nivel) -------------------------------
+// Pequena tabla en barstate.islast con el contexto vigente (tendencia + S/R).
+var table panel = table.new(position.top_right, 2, 4, bgcolor=color.new(#0E1116, 0), border_color=color.new(#2A2E39, 0), border_width=1, frame_color=color.new(#2A2E39, 0), frame_width=1)
+if barstate.islast
+    string txtTend = tendAlcista ? "ALCISTA" : tendBajista ? "BAJISTA" : "RANGO"
+    color  colTend = tendAlcista ? C_ALCISTA : tendBajista ? C_BAJISTA : C_NEUTRAL
+    table.cell(panel, 0, 0, "PineScope · Velas", text_color=C_TEXTO, text_size=size.small, bgcolor=color.new(#161A20, 0))
+    table.cell(panel, 1, 0, "",                  bgcolor=color.new(#161A20, 0))
+    table.cell(panel, 0, 1, "Tendencia",  text_color=color.new(C_TEXTO, 30), text_size=size.small)
+    table.cell(panel, 1, 1, txtTend,      text_color=colTend, text_size=size.small)
+    table.cell(panel, 0, 2, "Resistencia", text_color=color.new(C_TEXTO, 30), text_size=size.small)
+    table.cell(panel, 1, 2, na(resistencia) ? "—" : str.tostring(resistencia, format.mintick), text_color=C_BAJISTA, text_size=size.small)
+    table.cell(panel, 0, 3, "Soporte",     text_color=color.new(C_TEXTO, 30), text_size=size.small)
+    table.cell(panel, 1, 3, na(soporte) ? "—" : str.tostring(soporte, format.mintick), text_color=C_ALCISTA, text_size=size.small)
