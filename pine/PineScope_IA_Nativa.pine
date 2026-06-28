@@ -135,7 +135,7 @@ if barstate.isconfirmed and bar_index > horizon + 5
         if sgnV == actualDir
             hV := hV + 1
 
-f_rate(h, t) => t > 0 ? h / t : 0.5
+f_rate(h, t) => t > 0 ? float(h) / float(t) : 0.5   // float() evita la division ENTERA de Pine v6
 rateT  = f_rate(hT,  tT)
 rateH  = f_rate(hH,  tH)
 rateR  = f_rate(hR,  tR)

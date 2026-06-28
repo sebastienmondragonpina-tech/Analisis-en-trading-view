@@ -1,0 +1,479 @@
+//@version=6
+// =============================================================================
+// PineScope con IA  ·  MOTOR ANALISTA NATIVO AMPLIADO  ·  Pine Script v6
+// 100% DENTRO DE TRADINGVIEW (sin internet, sin API, sin pagar)
+// -----------------------------------------------------------------------------
+// QUE ES (honesto): NO es un chatbot/LLM (imposible dentro de Pine). Es un MOTOR
+// EXPERTO que lee MUCHAS senales que se actualizan a diario, le da un PESO a cada
+// una, APRENDE solo (sube el peso a las que aciertan en ESTE activo, e incluso
+// INVIERTE las que aciertan menos del 50%), y entrega un VEREDICTO escrito +
+// confianza + el "por que" + una gestion de riesgo (stop/objetivo/R:R).
+//
+// COMO APRENDE:
+//   - Cada vela confirmada compara lo que dijo cada senal "horizon" velas atras
+//     con lo que REALMENTE hizo el precio (en unidades de ATR, premiando los
+//     movimientos grandes y no la suerte de velas planas).
+//   - Lleva una tasa de acierto por senal con MEMORIA (olvida regimenes viejos).
+//   - El peso de cada senal = su VENTAJA real (que tan lejos de 50% acierta).
+//   - Una senal con <50% de acierto se usa AL REVES (mean-reversion del propio
+//     indicador). Fundamentales y Mercado llevan peso fijo (cambian a otra
+//     frecuencia y no se deben evaluar por vela).
+//
+// DATOS (16 senales ponderadas + 2 paneles de contexto):
+//   TECNICO:  Tendencia local, Tendencia marco superior, Multi-marco (TFs >= chart),
+//             RSI, MACD, Estocastico, ADX/DMI, Bollinger %B, Supertrend, Momentum
+//   VOLUMEN:  OBV, MFI, CMF (Chaikin), VWAP (solo intradia)
+//   MACRO:    Fundamentales (Ingresos/EBITDA/EBIT/Neto/EPS/FCF/ROE/Deuda/PE/EV-EBITDA
+//             + crecimiento YoY) via request.financial ; Mercado/Riesgo (VIX,
+//             Put/Call, Amplitud ADD/TRIN, Vol Up/Down, SPX, DXY) via internos.
+// =============================================================================
+
+indicator("PineScope con IA", shorttitle = "PineScope IA+", overlay = true, max_labels_count = 100)
+
+// =============================================================================
+// 0) PALETA
+// =============================================================================
+colAlc   = #26A69A
+colBaj   = #EF5350
+colAviso = #E0A800
+colFondo = #0E1117
+colHead  = #1B2230
+colTxt   = #D1D4DC
+colTxtT  = #8A93A2
+colFila  = #141A24
+colBorde = #2A3242
+colFund  = #2D6CDF
+
+// =============================================================================
+// 1) INPUTS
+// =============================================================================
+gP = "Paneles (posiciones para que NO se solapen)"
+posIA   = input.string("Arriba derecha",  "Panel IA",            options = ["Arriba derecha","Arriba izquierda","Abajo derecha","Abajo izquierda","Centro derecha","Centro izquierda"], group = gP)
+posFund = input.string("Abajo izquierda", "Panel Fundamentales", options = ["Arriba derecha","Arriba izquierda","Abajo derecha","Abajo izquierda","Centro derecha","Centro izquierda"], group = gP)
+posInt  = input.string("Abajo derecha",   "Panel Mercado",       options = ["Arriba derecha","Arriba izquierda","Abajo derecha","Abajo izquierda","Centro derecha","Centro izquierda"], group = gP)
+showFund = input.bool(true, "Mostrar panel Fundamentales", group = gP)
+showInt  = input.bool(true, "Mostrar panel Mercado/Riesgo", group = gP)
+showBg   = input.bool(true, "Tenir el fondo segun el veredicto", group = gP)
+
+gM = "Motor IA (aprendizaje)"
+htfTf   = input.timeframe("D", "Marco superior (confirmacion de tendencia)", group = gM)
+learnOn = input.bool(true, "Aprendizaje activado", group = gM, tooltip = "Si lo apagas, todas las senales pesan igual y ninguna se invierte.")
+horizon = input.int(5, "Horizonte de aprendizaje (velas a futuro)", minval = 1, maxval = 60, group = gM, tooltip = "Con cuantas velas adelante se mide si cada senal acerto.")
+minW    = input.float(0.05, "Peso minimo de una senal", minval = 0.0, maxval = 1.0, step = 0.05, group = gM)
+decay   = input.float(0.99, "Memoria del aprendizaje (1 = nunca olvida)", minval = 0.90, maxval = 1.0, step = 0.005, group = gM, tooltip = "Mas bajo = se re-adapta mas rapido a regimenes nuevos.")
+sharp   = input.float(1.5, "Agudeza (cuanto premia el acierto)", minval = 1.0, maxval = 4.0, step = 0.5, group = gM)
+macroW  = input.float(0.8, "Peso fijo de Fundamentales y Mercado", minval = 0.0, maxval = 2.0, step = 0.1, group = gM)
+
+gG = "Gestion de riesgo"
+atrMultStop   = input.float(1.5, "Stop = ATR x", minval = 0.5, maxval = 5.0,  step = 0.5, group = gG)
+atrMultTarget = input.float(3.0, "Objetivo = ATR x", minval = 0.5, maxval = 10.0, step = 0.5, group = gG)
+
+gE = "Exportar"
+emitAI = input.bool(false, "Emitir resumen IA por alerta (JSON)", group = gE, tooltip = "Solo si quieres mandar el veredicto a una IA EXTERNA por webhook (plan de pago). Dentro de TradingView no hace falta.")
+
+// =============================================================================
+// 2) HELPERS (todos a nivel global, antes de usarse)
+// =============================================================================
+f_clamp(x) => math.max(-1.0, math.min(1.0, x))
+
+f_pos(s) =>
+    p = s == "Arriba izquierda" ? position.top_left : s == "Abajo derecha" ? position.bottom_right : s == "Abajo izquierda" ? position.bottom_left : s == "Centro derecha" ? position.middle_right : s == "Centro izquierda" ? position.middle_left : position.top_right
+    p
+
+f_lectura(s) => s > 0.15 ? "Alcista" : s < -0.15 ? "Bajista" : "Neutral"
+f_lecCol(s)  => s > 0.15 ? colAlc    : s < -0.15 ? colBaj    : colAviso
+f_firmado(x) => (x >= 0 ? "+" : "") + str.tostring(x, "#.#")
+
+f_money(v) =>
+    na(v) ? "n/d" : math.abs(v) >= 1e9 ? str.tostring(v / 1e9, "#.##") + "B" : math.abs(v) >= 1e6 ? str.tostring(v / 1e6, "#.##") + "M" : math.abs(v) >= 1e3 ? str.tostring(v / 1e3, "#.##") + "K" : str.tostring(v, "#.##")
+
+f_addg(acc, n, g, sc) =>
+    inc = na(g) ? 0.0 : f_clamp(g * sc)
+    cn  = na(g) ? 0 : 1
+    [acc + inc, n + cn]
+
+f_fold(acc, n, v) =>
+    inc = na(v) ? 0.0 : v
+    cn  = na(v) ? 0 : 1
+    [acc + inc, n + cn]
+
+f_yoy(cur, prev) => na(cur) or na(prev) or prev <= 0 ? na : (cur - prev) / prev
+
+f_tfScore() =>
+    e50  = ta.ema(close, 50)
+    e200 = ta.ema(close, 200)
+    sc = (close > e50 ? 0.5 : -0.5) + (e50 > e200 ? 0.5 : -0.5)
+    sc
+
+f_rowcell(t, rIdx, nombre, efScore, peso, aporte, sW) =>
+    bg = rIdx % 2 == 0 ? colFila : colFondo
+    table.cell(t, 0, rIdx, nombre, text_color = colTxt, text_halign = text.align_left, bgcolor = bg, text_size = size.tiny)
+    table.cell(t, 1, rIdx, f_lectura(efScore), text_color = f_lecCol(efScore), text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+    table.cell(t, 2, rIdx, str.tostring(sW > 0 ? peso * 100 / sW : 0, "#") + "%", text_color = colTxtT, text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+    table.cell(t, 3, rIdx, f_firmado(aporte * 100), text_color = f_lecCol(aporte), text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+
+f_introw(t, rIdx, nombre, valTxt, score) =>
+    bg = rIdx % 2 == 0 ? colFila : colFondo
+    table.cell(t, 0, rIdx, nombre, text_color = colTxt, text_halign = text.align_left, bgcolor = bg, text_size = size.tiny)
+    table.cell(t, 1, rIdx, valTxt, text_color = colTxt, text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+    table.cell(t, 2, rIdx, f_lectura(score), text_color = f_lecCol(score), text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+
+// =============================================================================
+// 3) SENALES TECNICAS (normalizadas a [-1 , +1])
+// =============================================================================
+chartSec = timeframe.in_seconds()
+
+// 3.1 Tendencia local
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+sTr = f_clamp((close > ema50 ? 0.5 : -0.5) + (ema50 > ema200 ? 0.5 : -0.5))
+
+// 3.2 Tendencia marco superior
+htfClose = request.security(syminfo.tickerid, htfTf, close,             lookahead = barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, 50),  lookahead = barmerge.lookahead_off)
+sHf = na(htfClose) or na(htfEma) ? 0.0 : (htfClose > htfEma ? 1.0 : -1.0)
+
+// 3.3 Multi-marco: solo TFs MAYORES O IGUALES al del grafico (evita contaminar)
+mtf1 = request.security(syminfo.tickerid, "30",  f_tfScore(), lookahead = barmerge.lookahead_off)
+mtf2 = request.security(syminfo.tickerid, "60",  f_tfScore(), lookahead = barmerge.lookahead_off)
+mtf3 = request.security(syminfo.tickerid, "240", f_tfScore(), lookahead = barmerge.lookahead_off)
+mtf4 = request.security(syminfo.tickerid, "D",   f_tfScore(), lookahead = barmerge.lookahead_off)
+mtf5 = request.security(syminfo.tickerid, "W",   f_tfScore(), lookahead = barmerge.lookahead_off)
+mtf6 = request.security(syminfo.tickerid, "M",   f_tfScore(), lookahead = barmerge.lookahead_off)
+v1 = timeframe.in_seconds("30")  >= chartSec ? mtf1 : na
+v2 = timeframe.in_seconds("60")  >= chartSec ? mtf2 : na
+v3 = timeframe.in_seconds("240") >= chartSec ? mtf3 : na
+v4 = timeframe.in_seconds("D")   >= chartSec ? mtf4 : na
+v5 = timeframe.in_seconds("W")   >= chartSec ? mtf5 : na
+v6 = timeframe.in_seconds("M")   >= chartSec ? mtf6 : na
+[ms1, mc1] = f_fold(0.0, 0,   v1)
+[ms2, mc2] = f_fold(ms1, mc1, v2)
+[ms3, mc3] = f_fold(ms2, mc2, v3)
+[ms4, mc4] = f_fold(ms3, mc3, v4)
+[ms5, mc5] = f_fold(ms4, mc4, v5)
+[ms6, mc6] = f_fold(ms5, mc5, v6)
+sMt = mc6 > 0 ? f_clamp(ms6 / mc6) : sTr
+
+// 3.4 RSI
+sRs = f_clamp((ta.rsi(close, 14) - 50) / 50)
+
+// 3.5 MACD
+[macdLine, sigLine, histLine] = ta.macd(close, 12, 26, 9)
+histStd = ta.stdev(histLine, 50)
+sMd = histStd > 0 ? f_clamp(histLine / (histStd * 2)) : 0.0
+
+// 3.6 Estocastico
+kVal = ta.sma(ta.stoch(close, high, low, 14), 3)
+sSt = f_clamp((kVal - 50) / 50)
+
+// 3.7 ADX / DMI
+[diP, diM, adxv] = ta.dmi(14, 14)
+sAx = f_clamp((diP - diM) / (diP + diM + 0.0001) * math.min(1.0, adxv / 40.0))
+
+// 3.8 Bollinger %B
+bbBasis = ta.sma(close, 20)
+bbDev   = 2 * ta.stdev(close, 20)
+pctB    = (close - (bbBasis - bbDev)) / math.max(0.0001, 2 * bbDev)
+sBb = f_clamp((pctB - 0.5) * 2)
+
+// 3.9 Supertrend
+[stLine, stDir] = ta.supertrend(3.0, 10)
+sSp = stDir < 0 ? 1.0 : -1.0
+
+// 3.10 Momentum (ROC normalizado)
+rocv   = ta.roc(close, 10)
+rocStd = ta.stdev(ta.roc(close, 10), 50)
+sMo = rocStd > 0 ? f_clamp(rocv / (rocStd * 2)) : 0.0
+
+// =============================================================================
+// 4) SENALES DE VOLUMEN
+// =============================================================================
+obvSlope = ta.obv - ta.obv[10]
+obvStd   = ta.stdev(ta.obv - ta.obv[10], 50)
+sOb = obvStd > 0 ? f_clamp(obvSlope / (obvStd * 2)) : f_clamp(math.sign(obvSlope))
+
+sMf = f_clamp((ta.mfi(hlc3, 14) - 50) / 50)
+
+mfm = (close - low - (high - close)) / math.max(0.0001, high - low)
+mfv = mfm * volume
+cmf = math.sum(mfv, 20) / math.max(1.0, math.sum(volume, 20))
+sCm = f_clamp(cmf)
+
+vwapVal = ta.vwap(hlc3)
+atr14   = ta.atr(14)
+isIntra = timeframe.isintraday
+sVw = (isIntra and atr14 > 0 and not na(vwapVal)) ? f_clamp((close - vwapVal) / atr14 * 0.5) : 0.0
+
+rvol = volume / math.max(1.0, ta.sma(volume, 20))
+atrRank = ta.percentrank(ta.atr(14), 100)
+
+// =============================================================================
+// 5) FUNDAMENTALES (request.financial — SIEMPRE a nivel global)
+// =============================================================================
+revQ    = request.financial(syminfo.tickerid, "TOTAL_REVENUE",            "FQ", ignore_invalid_symbol = true)
+ebitdaQ = request.financial(syminfo.tickerid, "EBITDA",                   "FQ", ignore_invalid_symbol = true)
+ebitQ   = request.financial(syminfo.tickerid, "OPER_INCOME",              "FQ", ignore_invalid_symbol = true)
+netQ    = request.financial(syminfo.tickerid, "NET_INCOME",               "FQ", ignore_invalid_symbol = true)
+epsQ    = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FQ", ignore_invalid_symbol = true)
+fcfQ    = request.financial(syminfo.tickerid, "FREE_CASH_FLOW",           "FQ", ignore_invalid_symbol = true)
+roeQ    = request.financial(syminfo.tickerid, "RETURN_ON_EQUITY",         "FY", ignore_invalid_symbol = true)
+deQ     = request.financial(syminfo.tickerid, "DEBT_TO_EQUITY",           "FY", ignore_invalid_symbol = true)
+evebQ   = request.financial(syminfo.tickerid, "ENTERPRISE_VALUE_EBITDA",  "FY", ignore_invalid_symbol = true)
+// P/E nativo: precio / EPS anual (mas fiable que el ID PRICE_EARNINGS, que muchos simbolos no sirven)
+epsY    = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FY", ignore_invalid_symbol = true)
+peQ     = na(epsY) or epsY <= 0 ? na : close / epsY
+
+chgRev = ta.change(revQ)    != 0
+chgEb  = ta.change(ebitdaQ) != 0
+chgEps = ta.change(epsQ)    != 0
+chgFcf = ta.change(fcfQ)    != 0
+revGrow = f_yoy(revQ,    ta.valuewhen(chgRev, revQ,    4))
+ebGrow  = f_yoy(ebitdaQ, ta.valuewhen(chgEb,  ebitdaQ, 4))
+epsGrow = f_yoy(epsQ,    ta.valuewhen(chgEps, epsQ,    4))
+fcfGrow = f_yoy(fcfQ,    ta.valuewhen(chgFcf, fcfQ,    4))
+margin  = na(ebitdaQ) or na(revQ) or revQ == 0 ? na : ebitdaQ / revQ
+roeLvl  = na(roeQ) ? na : (roeQ - 10.0) / 20.0
+
+[ga1, gn1] = f_addg(0.0, 0,   revGrow, 3.0)
+[ga2, gn2] = f_addg(ga1, gn1, ebGrow,  3.0)
+[ga3, gn3] = f_addg(ga2, gn2, epsGrow, 3.0)
+[ga4, gn4] = f_addg(ga3, gn3, fcfGrow, 3.0)
+[ga5, gn5] = f_addg(ga4, gn4, roeLvl,  1.0)
+sFu = gn5 > 0 ? f_clamp(ga5 / gn5) : 0.0
+hayFund = not na(revQ) or not na(ebitdaQ) or not na(epsQ)
+
+// =============================================================================
+// 6) MERCADO / RIESGO (internos de mercado)
+// =============================================================================
+vixv  = request.security("TVC:VIX",  "D", close, ignore_invalid_symbol = true)
+pccv  = request.security("USI:PCC",  "D", close, ignore_invalid_symbol = true)
+addv  = request.security("USI:ADD",  "D", close, ignore_invalid_symbol = true)
+trinv = request.security("USI:TRIN", "D", close, ignore_invalid_symbol = true)
+uvolv = request.security("USI:UVOL", "D", close, ignore_invalid_symbol = true)
+dvolv = request.security("USI:DVOL", "D", close, ignore_invalid_symbol = true)
+spxTrend = request.security("SP:SPX",  "D", close > ta.ema(close, 50) ? 1.0 : -1.0, ignore_invalid_symbol = true, lookahead = barmerge.lookahead_off)
+dxyTrend = request.security("TVC:DXY", "D", close > ta.ema(close, 50) ? 1.0 : -1.0, ignore_invalid_symbol = true, lookahead = barmerge.lookahead_off)
+
+vixScore  = na(vixv)  ? 0.0 : f_clamp((20.0 - vixv) / 20.0)
+pccScore  = na(pccv)  ? 0.0 : f_clamp(1.0 - pccv)
+addScore  = na(addv)  ? 0.0 : f_clamp(addv / 1500.0)
+trinScore = na(trinv) ? 0.0 : f_clamp(1.0 - trinv)
+udScore   = na(uvolv) or na(dvolv) ? 0.0 : f_clamp((uvolv - dvolv) / (uvolv + dvolv + 1.0))
+spxScore  = na(spxTrend) ? 0.0 : spxTrend
+dxyScore  = na(dxyTrend) ? 0.0 : -dxyTrend
+sMk = f_clamp((vixScore + pccScore + addScore + trinScore + udScore + spxScore + dxyScore) / 7.0 * 2.0)
+hayInt = not na(vixv) or not na(addv) or not na(spxTrend)
+
+riskTxt = sMk > 0.2 ? "RIESGO-ON" : sMk < -0.2 ? "RIESGO-OFF" : "MIXTO"
+riskCol = sMk > 0.2 ? colAlc : sMk < -0.2 ? colBaj : colAviso
+
+// =============================================================================
+// 7) APRENDIZAJE — tasa de acierto con MEMORIA + magnitud (16 senales, 0-13 aprenden)
+// =============================================================================
+var array<float> hitsA = array.new<float>(16, 0.0)
+var array<float> totA  = array.new<float>(16, 0.0)
+var int nLearn = 0
+var array<string> namesA = array.from("Tendencia", "Tendencia sup.", "Multi-marco", "RSI", "MACD", "Estocastico", "ADX/DMI", "Bollinger", "Supertrend", "Momentum", "OBV", "MFI", "CMF", "VWAP", "Fundamentales", "Mercado")
+
+scoresNow  = array.from(sTr, sHf, sMt, sRs, sMd, sSt, sAx, sBb, sSp, sMo, sOb, sMf, sCm, sVw, sFu, sMk)
+scoresPast = array.from(sTr[horizon], sHf[horizon], sMt[horizon], sRs[horizon], sMd[horizon], sSt[horizon], sAx[horizon], sBb[horizon], sSp[horizon], sMo[horizon], sOb[horizon], sMf[horizon], sCm[horizon], sVw[horizon], sFu[horizon], sMk[horizon])
+
+atrH = ta.atr(14)[horizon]
+retF = atrH > 0 ? (close - close[horizon]) / atrH : 0.0
+if barstate.isconfirmed and bar_index > horizon + 5
+    actualDir = retF >= 0 ? 1 : -1
+    caseW = math.min(3.0, math.abs(retF))
+    nLearn := nLearn + 1
+    for i = 0 to 13
+        array.set(totA,  i, array.get(totA,  i) * decay)
+        array.set(hitsA, i, array.get(hitsA, i) * decay)
+        g = math.sign(array.get(scoresPast, i))
+        if g != 0 and caseW > 0
+            array.set(totA, i, array.get(totA, i) + caseW)
+            if g == actualDir
+                array.set(hitsA, i, array.get(hitsA, i) + caseW)
+
+weightsA = array.new<float>(16, 1.0)
+ratesA   = array.new<float>(16, 0.5)
+dirA     = array.new<float>(16, 1.0)
+sumW = 0.0
+for i = 0 to 15
+    rate = 0.5
+    if i <= 13
+        tt = array.get(totA, i)
+        rate := tt > 0 ? array.get(hitsA, i) / tt : 0.5
+    array.set(ratesA, i, rate)
+    edge = math.abs(rate - 0.5) * 2.0
+    dir = rate < 0.5 ? -1.0 : 1.0
+    w = 1.0
+    if i >= 14
+        dir := 1.0
+        w := learnOn ? macroW : 1.0
+    else
+        w := learnOn ? math.max(minW, math.pow(edge, sharp)) : 1.0
+    array.set(dirA, i, dir)
+    array.set(weightsA, i, w)
+    sumW := sumW + w
+
+netSum = 0.0
+for i = 0 to 15
+    netSum := netSum + array.get(weightsA, i) * array.get(dirA, i) * array.get(scoresNow, i)
+netRaw    = sumW > 0 ? netSum / sumW : 0.0
+netSmooth = ta.ema(netRaw, 2)
+disp  = array.stdev(scoresNow)
+agree = 1.0 - math.min(1.0, disp)
+probBull = (netSmooth + 1) / 2 * 100
+conf     = math.abs(netSmooth) * 100 * (0.5 + 0.5 * agree)
+
+verdTxt = netSmooth > 0.50 ? "COMPRAR FUERTE" : netSmooth > 0.20 ? "COMPRAR" : netSmooth < -0.50 ? "VENDER FUERTE" : netSmooth < -0.20 ? "VENDER" : "ESPERAR"
+verdCol = netSmooth > 0.20 ? colAlc : netSmooth < -0.20 ? colBaj : colAviso
+
+// gestion de riesgo
+isBull = netSmooth > 0.20
+isBear = netSmooth < -0.20
+stopLv = isBull ? close - atr14 * atrMultStop : isBear ? close + atr14 * atrMultStop : na
+tgtLv  = isBull ? close + atr14 * atrMultTarget : isBear ? close - atr14 * atrMultTarget : na
+rrVal  = atrMultStop > 0 ? atrMultTarget / atrMultStop : na
+
+// =============================================================================
+// 8) FONDO TENIDO
+// =============================================================================
+bgcolor(showBg ? color.new(verdCol, 92) : na)
+
+// =============================================================================
+// 9) PANELES
+// =============================================================================
+var table tblIA   = table.new(f_pos(posIA),   4, 25, bgcolor = colFondo, border_color = colBorde, border_width = 1, frame_color = colBorde, frame_width = 1)
+var table tblFund = table.new(f_pos(posFund), 3, 14, bgcolor = colFondo, border_color = colBorde, border_width = 1, frame_color = colBorde, frame_width = 1)
+var table tblInt  = table.new(f_pos(posInt),  3, 10, bgcolor = colFondo, border_color = colBorde, border_width = 1, frame_color = colBorde, frame_width = 1)
+
+if barstate.islast
+    // ----- PANEL IA -----
+    table.cell(tblIA, 0, 0, "MOTOR IA — " + syminfo.ticker, text_color = colTxt, text_halign = text.align_center, bgcolor = colHead, text_size = size.small)
+    table.merge_cells(tblIA, 0, 0, 3, 0)
+    table.cell(tblIA, 0, 1, "Senal",   text_color = colTxtT, text_halign = text.align_left,   bgcolor = colHead, text_size = size.tiny)
+    table.cell(tblIA, 1, 1, "Lectura", text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+    table.cell(tblIA, 2, 1, "Peso",    text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+    table.cell(tblIA, 3, 1, "Aporte",  text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+    maxIdx = 0
+    minIdx = 0
+    maxV = -100000.0
+    minV = 100000.0
+    for i = 0 to 15
+        r = i + 2
+        ef = array.get(dirA, i) * array.get(scoresNow, i)
+        wt = array.get(weightsA, i)
+        ct = sumW > 0 ? wt * ef / sumW : 0.0
+        f_rowcell(tblIA, r, array.get(namesA, i), ef, wt, ct, sumW)
+        if ct > maxV
+            maxV := ct
+            maxIdx := i
+        if ct < minV
+            minV := ct
+            minIdx := i
+    table.cell(tblIA, 0, 18, verdTxt, text_color = #FFFFFF, text_halign = text.align_center, bgcolor = verdCol, text_size = size.small)
+    table.merge_cells(tblIA, 0, 18, 3, 18)
+    table.cell(tblIA, 0, 19, "Sesgo alcista " + str.tostring(probBull, "#") + "%   ·   Confianza " + str.tostring(conf, "#") + "%", text_color = colTxt, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tblIA, 0, 19, 3, 19)
+    table.cell(tblIA, 0, 20, "A favor: " + (maxV > 0 ? array.get(namesA, maxIdx) : "ninguna") + "   ·   En contra: " + (minV < 0 ? array.get(namesA, minIdx) : "ninguna"), text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tblIA, 0, 20, 3, 20)
+    notaAp = learnOn ? ("Aprendido en " + str.tostring(nLearn) + " casos  ·  acierto MACD " + str.tostring(array.get(ratesA, 4) * 100, "#") + "%  ·  vol " + str.tostring(array.get(ratesA, 10) * 100, "#") + "%") : "Aprendizaje apagado (todas pesan igual)"
+    table.cell(tblIA, 0, 21, notaAp, text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tblIA, 0, 21, 3, 21)
+    regimeTxt = "ADX " + str.tostring(adxv, "#") + (adxv > 25 ? " (fuerte)" : " (debil)") + "  ·  Vol " + (atrRank > 66 ? "alta" : atrRank < 33 ? "baja" : "media") + "  ·  RVOL " + str.tostring(rvol, "#.#") + "x"
+    table.cell(tblIA, 0, 22, regimeTxt, text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tblIA, 0, 22, 3, 22)
+    gestionTxt = (isBull or isBear) ? ("Stop " + str.tostring(stopLv, format.mintick) + "  ·  Obj " + str.tostring(tgtLv, format.mintick) + "  ·  R:R " + str.tostring(rrVal, "#.#")) : "Sin operacion (ESPERAR)"
+    table.cell(tblIA, 0, 23, gestionTxt, text_color = colTxt, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+    table.merge_cells(tblIA, 0, 23, 3, 23)
+    table.cell(tblIA, 0, 24, "Analisis automatico — NO es consejo de inversion", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tblIA, 0, 24, 3, 24)
+
+    // ----- PANEL FUNDAMENTALES -----
+    if showFund
+        fc = hayFund ? colTxt : colTxtT
+        table.cell(tblFund, 0, 0, "FUNDAMENTALES" + (hayFund ? "" : " (n/d)"), text_color = colTxt, text_halign = text.align_center, bgcolor = colFund, text_size = size.small)
+        table.merge_cells(tblFund, 0, 0, 2, 0)
+        table.cell(tblFund, 0, 1, "Metrica", text_color = colTxtT, text_halign = text.align_left,   bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblFund, 1, 1, "Valor",   text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblFund, 2, 1, "Crec YoY", text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblFund, 0, 2, "Ingresos", text_color = fc, text_halign = text.align_left, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 1, 2, f_money(revQ), text_color = fc, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 2, 2, na(revGrow) ? "n/d" : f_firmado(revGrow * 100) + "%", text_color = na(revGrow) ? colTxtT : f_lecCol(revGrow), text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 0, 3, "EBITDA", text_color = fc, text_halign = text.align_left, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 1, 3, f_money(ebitdaQ), text_color = fc, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 2, 3, na(ebGrow) ? "n/d" : f_firmado(ebGrow * 100) + "%", text_color = na(ebGrow) ? colTxtT : f_lecCol(ebGrow), text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 0, 4, "EBIT", text_color = fc, text_halign = text.align_left, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 1, 4, f_money(ebitQ), text_color = fc, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 2, 4, "", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 0, 5, "Neto", text_color = fc, text_halign = text.align_left, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 1, 5, f_money(netQ), text_color = fc, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 2, 5, "", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 0, 6, "EPS", text_color = fc, text_halign = text.align_left, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 1, 6, na(epsQ) ? "n/d" : str.tostring(epsQ, "#.##"), text_color = fc, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 2, 6, na(epsGrow) ? "n/d" : f_firmado(epsGrow * 100) + "%", text_color = na(epsGrow) ? colTxtT : f_lecCol(epsGrow), text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 0, 7, "FCF", text_color = fc, text_halign = text.align_left, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 1, 7, f_money(fcfQ), text_color = fc, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 2, 7, na(fcfGrow) ? "n/d" : f_firmado(fcfGrow * 100) + "%", text_color = na(fcfGrow) ? colTxtT : f_lecCol(fcfGrow), text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 0, 8, "Margen EBITDA", text_color = fc, text_halign = text.align_left, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 1, 8, na(margin) ? "n/d" : str.tostring(margin * 100, "#.#") + "%", text_color = fc, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 2, 8, "", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 0, 9, "ROE", text_color = fc, text_halign = text.align_left, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 1, 9, na(roeQ) ? "n/d" : str.tostring(roeQ, "#.#") + "%", text_color = fc, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 2, 9, "", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 0, 10, "Deuda/Capital", text_color = fc, text_halign = text.align_left, bgcolor = colFila, text_size = size.tiny)
+        deCol = na(deQ) ? colTxtT : deQ > 2.0 ? colBaj : deQ > 1.0 ? colAviso : colAlc
+        table.cell(tblFund, 1, 10, na(deQ) ? "n/d" : str.tostring(deQ, "#.##"), text_color = deCol, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 2, 10, "", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 0, 11, "P/E", text_color = fc, text_halign = text.align_left, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 1, 11, na(peQ) ? "n/d" : str.tostring(peQ, "#.#"), text_color = fc, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 2, 11, "", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+        table.cell(tblFund, 0, 12, "EV/EBITDA", text_color = fc, text_halign = text.align_left, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 1, 12, na(evebQ) ? "n/d" : str.tostring(evebQ, "#.#"), text_color = fc, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 2, 12, "", text_color = colTxtT, text_halign = text.align_center, bgcolor = colFila, text_size = size.tiny)
+        table.cell(tblFund, 0, 13, "Lectura IA", text_color = colTxt, text_halign = text.align_left, bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblFund, 1, 13, f_lectura(sFu), text_color = f_lecCol(sFu), text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblFund, 2, 13, f_firmado(sFu * 100), text_color = f_lecCol(sFu), text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+
+    // ----- PANEL MERCADO / RIESGO -----
+    if showInt
+        table.cell(tblInt, 0, 0, "MERCADO / RIESGO" + (hayInt ? "" : " (n/d)"), text_color = colTxt, text_halign = text.align_center, bgcolor = colHead, text_size = size.small)
+        table.merge_cells(tblInt, 0, 0, 2, 0)
+        table.cell(tblInt, 0, 1, "Indicador", text_color = colTxtT, text_halign = text.align_left,   bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblInt, 1, 1, "Valor",     text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblInt, 2, 1, "Lectura",   text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+        f_introw(tblInt, 2, "VIX",          na(vixv)  ? "n/d" : str.tostring(vixv,  "#.#"),  vixScore)
+        f_introw(tblInt, 3, "Put/Call",     na(pccv)  ? "n/d" : str.tostring(pccv,  "#.##"), pccScore)
+        f_introw(tblInt, 4, "Amplitud ADD", na(addv)  ? "n/d" : str.tostring(addv,  "#"),    addScore)
+        f_introw(tblInt, 5, "TRIN",         na(trinv) ? "n/d" : str.tostring(trinv, "#.##"), trinScore)
+        f_introw(tblInt, 6, "Vol Up/Down",  na(uvolv) or na(dvolv) ? "n/d" : str.tostring(udScore, "#.##"), udScore)
+        f_introw(tblInt, 7, "S&P 500",      na(spxTrend) ? "n/d" : (spxTrend > 0 ? "alza" : "baja"), spxScore)
+        f_introw(tblInt, 8, "Dolar (DXY)",  na(dxyTrend) ? "n/d" : (dxyTrend > 0 ? "alza" : "baja"), dxyScore)
+        table.cell(tblInt, 0, 9, "RIESGO", text_color = colTxt, text_halign = text.align_left, bgcolor = colHead, text_size = size.tiny)
+        table.cell(tblInt, 1, 9, riskTxt, text_color = #FFFFFF, text_halign = text.align_center, bgcolor = riskCol, text_size = size.tiny)
+        table.merge_cells(tblInt, 1, 9, 2, 9)
+
+// =============================================================================
+// 10) EXPORTAR a IA EXTERNA (opcional, NO hace falta dentro de TradingView)
+// =============================================================================
+if barstate.islast and emitAI and barstate.isconfirmed
+    jsonMsg = '{"app":"PineScope con IA"'
+    jsonMsg := jsonMsg + ',"symbol":"' + syminfo.tickerid + '"'
+    jsonMsg := jsonMsg + ',"tf":"' + timeframe.period + '"'
+    jsonMsg := jsonMsg + ',"veredicto":"' + verdTxt + '"'
+    jsonMsg := jsonMsg + ',"sesgo_alcista":' + str.tostring(probBull, "#.#")
+    jsonMsg := jsonMsg + ',"confianza":' + str.tostring(conf, "#.#")
+    jsonMsg := jsonMsg + ',"neto":' + str.tostring(netSmooth, "#.###")
+    jsonMsg := jsonMsg + ',"riesgo":"' + riskTxt + '"'
+    jsonMsg := jsonMsg + ',"gestion":{"stop":' + (na(stopLv) ? "null" : str.tostring(stopLv, format.mintick)) + ',"objetivo":' + (na(tgtLv) ? "null" : str.tostring(tgtLv, format.mintick)) + ',"rr":' + (na(rrVal) ? "null" : str.tostring(rrVal, "#.#")) + '}'
+    jsonMsg := jsonMsg + ',"fundamentales":{"ingresos":"' + f_money(revQ) + '","ebitda":"' + f_money(ebitdaQ) + '","fcf":"' + f_money(fcfQ) + '","margen":' + (na(margin) ? "null" : str.tostring(margin, "#.###")) + ',"pe":' + (na(peQ) ? "null" : str.tostring(peQ, "#.#")) + '}'
+    jsonMsg := jsonMsg + ',"senales":{'
+    jsonMsg := jsonMsg + '"tendencia":' + str.tostring(sTr, "#.##") + ',"tendencia_sup":' + str.tostring(sHf, "#.##")
+    jsonMsg := jsonMsg + ',"multimarco":' + str.tostring(sMt, "#.##") + ',"rsi":' + str.tostring(sRs, "#.##")
+    jsonMsg := jsonMsg + ',"macd":' + str.tostring(sMd, "#.##") + ',"estocastico":' + str.tostring(sSt, "#.##")
+    jsonMsg := jsonMsg + ',"adx":' + str.tostring(sAx, "#.##") + ',"bollinger":' + str.tostring(sBb, "#.##")
+    jsonMsg := jsonMsg + ',"supertrend":' + str.tostring(sSp, "#.##") + ',"momentum":' + str.tostring(sMo, "#.##")
+    jsonMsg := jsonMsg + ',"obv":' + str.tostring(sOb, "#.##") + ',"mfi":' + str.tostring(sMf, "#.##")
+    jsonMsg := jsonMsg + ',"cmf":' + str.tostring(sCm, "#.##") + ',"vwap":' + str.tostring(sVw, "#.##")
+    jsonMsg := jsonMsg + ',"fundamentales":' + str.tostring(sFu, "#.##") + ',"mercado":' + str.tostring(sMk, "#.##") + '}}'
+    alert(jsonMsg, alert.freq_once_per_bar_close)
