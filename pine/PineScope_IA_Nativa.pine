@@ -1,0 +1,240 @@
+//@version=6
+// =============================================================================
+// PineScope — IA NATIVA (MOTOR ANALISTA)  ·  Pine Script v6  ·  100% DENTRO DE TRADINGVIEW
+// -----------------------------------------------------------------------------
+// QUE ES (honesto): NO es un chatbot ni un LLM (eso es imposible dentro de Pine,
+// que no tiene internet). Esto es una "IA basica desde 0": un MOTOR EXPERTO que
+//   1) lee varias senales del precio (tendencia, RSI, MACD, estocastico, volumen),
+//   2) le da a cada una un PESO,
+//   3) APRENDE solo: mide que tan acertada ha sido cada senal EN ESTE ACTIVO y le
+//      sube o baja el peso (aprendizaje por tasa de acierto),
+//   4) suma todo y da un VEREDICTO escrito + % de confianza + el "por que".
+// Todo se CALCULA sobre OHLCV nativo. Corre dentro de TradingView, sin servidores,
+// sin API, sin pagar nada. Es el companero del Dashboard de PineScope.
+// =============================================================================
+
+indicator("PineScope — IA Nativa", shorttitle = "PineScope IA", overlay = true)
+
+// =============================================================================
+// 0) PALETA (igual que el Dashboard)
+// =============================================================================
+colAlc   = #26A69A
+colBaj   = #EF5350
+colAviso = #E0A800
+colFondo = #0E1117
+colHead  = #1B2230
+colTxt   = #D1D4DC
+colTxtT  = #8A93A2
+colFila  = #141A24
+colBorde = #2A3242
+
+// =============================================================================
+// 1) INPUTS
+// =============================================================================
+gP = "Panel"
+posIn  = input.string("Arriba derecha", "Posicion del panel", options = ["Arriba derecha","Arriba izquierda","Abajo derecha","Abajo izquierda","Centro derecha","Centro izquierda"], group = gP)
+showBg = input.bool(true, "Tenir el fondo segun el veredicto", group = gP)
+
+gM = "Motor IA"
+htfTf   = input.timeframe("D", "Marco superior (confirmacion de tendencia)", group = gM)
+learnOn = input.bool(true, "Aprendizaje activado (pesa mas lo que acierta)", group = gM, tooltip = "Si lo apagas, todas las senales pesan igual.")
+horizon = input.int(5, "Horizonte de aprendizaje (velas a futuro)", minval = 1, maxval = 60, group = gM, tooltip = "Con cuantas velas adelante se mide si cada senal acerto.")
+minW    = input.float(0.10, "Peso minimo de una senal", minval = 0.0, maxval = 1.0, step = 0.05, group = gM)
+
+gE = "Exportar"
+emitAI = input.bool(false, "Emitir resumen IA por alerta (JSON)", group = gE, tooltip = "Solo si quieres mandar el veredicto a una IA EXTERNA por webhook (plan de pago). Dentro de TradingView no hace falta.")
+
+f_pos(s) =>
+    pos = s == "Arriba izquierda" ? position.top_left : s == "Abajo derecha" ? position.bottom_right : s == "Abajo izquierda" ? position.bottom_left : s == "Centro derecha" ? position.middle_right : s == "Centro izquierda" ? position.middle_left : position.top_right
+    pos
+
+// =============================================================================
+// 2) SENALES (cada una se normaliza a un puntaje en [-1 , +1])
+//    -1 = bajista total ,  0 = neutral ,  +1 = alcista total
+// =============================================================================
+f_clamp(x) => math.max(-1.0, math.min(1.0, x))
+
+// --- 2.1 Tendencia local (EMA50 / EMA200) ---
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+scoreTrend = f_clamp((close > ema50 ? 0.5 : -0.5) + (ema50 > ema200 ? 0.5 : -0.5))
+
+// --- 2.2 Tendencia del marco superior ---
+htfClose = request.security(syminfo.tickerid, htfTf, close,            lookahead = barmerge.lookahead_off)
+htfEma   = request.security(syminfo.tickerid, htfTf, ta.ema(close, 50), lookahead = barmerge.lookahead_off)
+scoreHtf = na(htfClose) or na(htfEma) ? 0.0 : (htfClose > htfEma ? 1.0 : -1.0)
+
+// --- 2.3 RSI (momentum) ---
+rsiVal = ta.rsi(close, 14)
+scoreRsi = f_clamp((rsiVal - 50) / 50)
+
+// --- 2.4 MACD (histograma normalizado por su propia volatilidad) ---
+[macdLine, sigLine, histLine] = ta.macd(close, 12, 26, 9)
+histStd = ta.stdev(histLine, 50)
+scoreMacd = histStd > 0 ? f_clamp(histLine / (histStd * 2)) : 0.0
+
+// --- 2.5 Estocastico %K ---
+kVal = ta.sma(ta.stoch(close, high, low, 14), 3)
+scoreStoch = f_clamp((kVal - 50) / 50)
+
+// --- 2.6 Volumen (OBV en pendiente + MFI), confirmado por volumen relativo ---
+obvSlope = ta.obv - ta.obv[10]
+mfiVal   = ta.mfi(hlc3, 14)
+rvol     = volume / math.max(1.0, ta.sma(volume, 20))
+sVolBase = f_clamp((math.sign(obvSlope) * 0.6) + ((mfiVal - 50) / 50) * 0.4)
+scoreVol = f_clamp(sVolBase * math.min(1.5, rvol))
+
+// =============================================================================
+// 3) APRENDIZAJE — tasa de acierto de cada senal EN ESTE ACTIVO
+//    En cada vela confirmada miramos el puntaje que la senal dio "horizon" velas
+//    atras y lo comparamos con lo que REALMENTE hizo el precio desde entonces.
+// =============================================================================
+var int hT = 0
+var int tT = 0
+var int hH = 0
+var int tH = 0
+var int hR = 0
+var int tR = 0
+var int hMa = 0
+var int tMa = 0
+var int hS = 0
+var int tS = 0
+var int hV = 0
+var int tV = 0
+
+if barstate.isconfirmed and bar_index > horizon + 5
+    actualDir = close > close[horizon] ? 1 : -1
+    sgnT = math.sign(scoreTrend[horizon])
+    if sgnT != 0
+        tT := tT + 1
+        if sgnT == actualDir
+            hT := hT + 1
+    sgnH = math.sign(scoreHtf[horizon])
+    if sgnH != 0
+        tH := tH + 1
+        if sgnH == actualDir
+            hH := hH + 1
+    sgnR = math.sign(scoreRsi[horizon])
+    if sgnR != 0
+        tR := tR + 1
+        if sgnR == actualDir
+            hR := hR + 1
+    sgnMa = math.sign(scoreMacd[horizon])
+    if sgnMa != 0
+        tMa := tMa + 1
+        if sgnMa == actualDir
+            hMa := hMa + 1
+    sgnS = math.sign(scoreStoch[horizon])
+    if sgnS != 0
+        tS := tS + 1
+        if sgnS == actualDir
+            hS := hS + 1
+    sgnV = math.sign(scoreVol[horizon])
+    if sgnV != 0
+        tV := tV + 1
+        if sgnV == actualDir
+            hV := hV + 1
+
+f_rate(h, t) => t > 0 ? h / t : 0.5
+rateT  = f_rate(hT,  tT)
+rateH  = f_rate(hH,  tH)
+rateR  = f_rate(hR,  tR)
+rateMa = f_rate(hMa, tMa)
+rateS  = f_rate(hS,  tS)
+rateV  = f_rate(hV,  tV)
+
+// pesos: si el aprendizaje esta activo, cada senal pesa segun cuanto acierta
+wT = learnOn ? math.max(minW, rateT)  : 1.0
+wH = learnOn ? math.max(minW, rateH)  : 1.0
+wR = learnOn ? math.max(minW, rateR)  : 1.0
+wM = learnOn ? math.max(minW, rateMa) : 1.0
+wS = learnOn ? math.max(minW, rateS)  : 1.0
+wV = learnOn ? math.max(minW, rateV)  : 1.0
+sumW = wT + wH + wR + wM + wS + wV
+
+// =============================================================================
+// 4) DECISION — puntaje neto, probabilidad y veredicto escrito
+// =============================================================================
+netRaw   = sumW > 0 ? (wT*scoreTrend + wH*scoreHtf + wR*scoreRsi + wM*scoreMacd + wS*scoreStoch + wV*scoreVol) / sumW : 0.0
+probBull = (netRaw + 1) / 2 * 100
+conf     = math.abs(netRaw) * 100
+
+cT = sumW > 0 ? wT*scoreTrend / sumW : 0.0
+cH = sumW > 0 ? wH*scoreHtf   / sumW : 0.0
+cR = sumW > 0 ? wR*scoreRsi   / sumW : 0.0
+cM = sumW > 0 ? wM*scoreMacd  / sumW : 0.0
+cS = sumW > 0 ? wS*scoreStoch / sumW : 0.0
+cV = sumW > 0 ? wV*scoreVol   / sumW : 0.0
+
+verdTxt = netRaw > 0.50 ? "COMPRAR FUERTE" : netRaw > 0.20 ? "COMPRAR" : netRaw < -0.50 ? "VENDER FUERTE" : netRaw < -0.20 ? "VENDER" : "ESPERAR"
+verdCol = netRaw > 0.20 ? colAlc : netRaw < -0.20 ? colBaj : colAviso
+
+f_lectura(s) => s > 0.15 ? "Alcista" : s < -0.15 ? "Bajista" : "Neutral"
+f_lecCol(s)  => s > 0.15 ? colAlc    : s < -0.15 ? colBaj    : colAviso
+f_firmado(x) => (x >= 0 ? "+" : "") + str.tostring(x, "#.#")
+
+// =============================================================================
+// 5) FONDO TENIDO (sin emojis: el color habla)
+// =============================================================================
+bgcolor(showBg ? color.new(verdCol, 92) : na)
+
+// =============================================================================
+// 6) PANEL — el "razonamiento de la IA"
+// =============================================================================
+var table tbl = table.new(f_pos(posIn), 4, 12, bgcolor = colFondo, border_color = colBorde, border_width = 1, frame_color = colBorde, frame_width = 1)
+
+f_row(rIdx, nombre, score, peso, aporte) =>
+    bg = rIdx % 2 == 0 ? colFila : colFondo
+    table.cell(tbl, 0, rIdx, nombre, text_color = colTxt, text_halign = text.align_left, bgcolor = bg, text_size = size.tiny)
+    table.cell(tbl, 1, rIdx, f_lectura(score), text_color = f_lecCol(score), text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+    table.cell(tbl, 2, rIdx, str.tostring(peso * 100 / sumW, "#") + "%", text_color = colTxtT, text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+    table.cell(tbl, 3, rIdx, f_firmado(aporte * 100), text_color = f_lecCol(aporte), text_halign = text.align_center, bgcolor = bg, text_size = size.tiny)
+
+if barstate.islast
+    table.cell(tbl, 0, 0, "MOTOR IA NATIVA", text_color = colTxt, text_halign = text.align_center, bgcolor = colHead, text_size = size.small)
+    table.merge_cells(tbl, 0, 0, 3, 0)
+    table.cell(tbl, 0, 1, "Senal",   text_color = colTxtT, text_halign = text.align_left,   bgcolor = colHead, text_size = size.tiny)
+    table.cell(tbl, 1, 1, "Lectura", text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+    table.cell(tbl, 2, 1, "Peso",    text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+    table.cell(tbl, 3, 1, "Aporte",  text_color = colTxtT, text_halign = text.align_center, bgcolor = colHead, text_size = size.tiny)
+    f_row(2, "Tendencia",      scoreTrend, wT, cT)
+    f_row(3, "Tendencia sup.", scoreHtf,   wH, cH)
+    f_row(4, "RSI",            scoreRsi,   wR, cR)
+    f_row(5, "MACD",           scoreMacd,  wM, cM)
+    f_row(6, "Estocastico",    scoreStoch, wS, cS)
+    f_row(7, "Volumen",        scoreVol,   wV, cV)
+    table.cell(tbl, 0, 8, verdTxt, text_color = #FFFFFF, text_halign = text.align_center, bgcolor = verdCol, text_size = size.small)
+    table.merge_cells(tbl, 0, 8, 3, 8)
+    table.cell(tbl, 0, 9, "Sesgo alcista " + str.tostring(probBull, "#") + "%   ·   Confianza " + str.tostring(conf, "#") + "%", text_color = colTxt, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tbl, 0, 9, 3, 9)
+    aportes = array.from(cT, cH, cR, cM, cS, cV)
+    nombres = array.from("Tendencia", "Tendencia sup.", "RSI", "MACD", "Estocastico", "Volumen")
+    maxC = array.max(aportes)
+    minC = array.min(aportes)
+    favor  = array.get(nombres, array.indexof(aportes, maxC))
+    contra = array.get(nombres, array.indexof(aportes, minC))
+    txtPorque = "A favor: " + (maxC > 0 ? favor : "ninguna") + "   ·   En contra: " + (minC < 0 ? contra : "ninguna")
+    table.cell(tbl, 0, 10, txtPorque, text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tbl, 0, 10, 3, 10)
+    notaAp = learnOn ? ("Aprendido en " + str.tostring(tT) + " casos  ·  acierto MACD " + str.tostring(rateMa * 100, "#") + "%  ·  vol " + str.tostring(rateV * 100, "#") + "%") : "Aprendizaje apagado (todas pesan igual)"
+    table.cell(tbl, 0, 11, notaAp, text_color = colTxtT, text_halign = text.align_center, bgcolor = colFondo, text_size = size.tiny)
+    table.merge_cells(tbl, 0, 11, 3, 11)
+
+// =============================================================================
+// 7) EXPORTAR a IA EXTERNA (opcional, NO hace falta dentro de TradingView)
+// =============================================================================
+if barstate.islast and emitAI and barstate.isconfirmed
+    jsonMsg = '{"app":"PineScope IA Nativa"'
+    jsonMsg := jsonMsg + ',"symbol":"' + syminfo.tickerid + '"'
+    jsonMsg := jsonMsg + ',"tf":"' + timeframe.period + '"'
+    jsonMsg := jsonMsg + ',"veredicto":"' + verdTxt + '"'
+    jsonMsg := jsonMsg + ',"sesgo_alcista":' + str.tostring(probBull, "#.#")
+    jsonMsg := jsonMsg + ',"confianza":' + str.tostring(conf, "#.#")
+    jsonMsg := jsonMsg + ',"neto":' + str.tostring(netRaw, "#.###")
+    jsonMsg := jsonMsg + ',"senales":{"tendencia":' + str.tostring(scoreTrend, "#.##")
+    jsonMsg := jsonMsg + ',"tendencia_sup":' + str.tostring(scoreHtf, "#.##")
+    jsonMsg := jsonMsg + ',"rsi":' + str.tostring(scoreRsi, "#.##")
+    jsonMsg := jsonMsg + ',"macd":' + str.tostring(scoreMacd, "#.##")
+    jsonMsg := jsonMsg + ',"estocastico":' + str.tostring(scoreStoch, "#.##")
+    jsonMsg := jsonMsg + ',"volumen":' + str.tostring(scoreVol, "#.##") + '}}'
+    alert(jsonMsg, alert.freq_once_per_bar_close)
