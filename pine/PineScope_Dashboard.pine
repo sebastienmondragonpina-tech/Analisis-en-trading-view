@@ -88,7 +88,7 @@ posMatriz  = input.string("Arriba derecha", "Posicion matriz", options = ["Arrib
 
 grpTact = "Resumen TACTICO (INTRADIA / SWING / MACRO)"
 showTact = input.bool(true, "Mostrar resumen tactico", group = grpTact)
-posTact  = input.string("Abajo derecha", "Posicion resumen", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpTact)
+posTact  = input.string("Abajo centro", "Posicion resumen", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpTact)
 umbralFuerte = input.float(3.0, "Umbral tendencia FUERTE (|score|)", minval = 0.5, step = 0.25, group = grpTact)
 umbralCero   = input.float(0.5, "Umbral zona NEUTRAL (|score|)", minval = 0.0, step = 0.25, group = grpTact)
 
@@ -103,7 +103,7 @@ pivRight = input.int(10, "Sensibilidad pivote derecha",   minval = 1, group = gr
 
 grpPred = "Prediccion por reglas"
 showPred = input.bool(true, "Mostrar tabla de prediccion", group = grpPred)
-posPred  = input.string("Centro derecha", "Posicion prediccion", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpPred)
+posPred  = input.string("Abajo derecha", "Posicion prediccion", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpPred)
 showPredLbl = input.bool(false, "Tambien etiqueta flotante (opcional)", group = grpPred)
 tfPred   = input.string("Auto (segun grafico)", "TF objetivo de la prediccion", options = ["Auto (segun grafico)","Intradia (1m-30m)","Swing (1H-Diario)","Macro (Sem-Anual)"], group = grpPred)
 atrMult  = input.float(1.5, "Multiplo de ATR para el objetivo", minval = 0.1, step = 0.1, group = grpPred)
@@ -702,17 +702,17 @@ var table tblM = na
 // Helper para rellenar una fila de la matriz (marco, score).
 f_filaMatriz(table _t, int _row, string _etq, int _sc) =>
     _bgFila = _row % 2 == 0 ? color.new(colFila, 0) : color.new(colFondo, 0)
-    table.cell(_t, 0, _row, _etq, text_color = colTxt, text_size = size.small, bgcolor = _bgFila)
-    table.cell(_t, 1, _row, f_trendEstado(_sc), text_color = f_colSign(_sc), text_size = size.small, bgcolor = f_bgSign(_sc))
-    table.cell(_t, 2, _row, f_trendFuerza(_sc), text_color = f_colSign(_sc), text_size = size.small, bgcolor = f_bgSign(_sc))
+    table.cell(_t, 0, _row, _etq, text_color = colTxt, text_size = size.tiny, bgcolor = _bgFila)
+    table.cell(_t, 1, _row, f_trendEstado(_sc), text_color = f_colSign(_sc), text_size = size.tiny, bgcolor = f_bgSign(_sc))
+    table.cell(_t, 2, _row, f_trendFuerza(_sc), text_color = f_colSign(_sc), text_size = size.tiny, bgcolor = f_bgSign(_sc))
 
 if showMatriz and barstate.islast
     // 1 cabecera + 12 marcos + 1 fila semaforo = 14 filas.
     tblM := table.new(f_pos(posMatriz), 3, 14, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera.
-    table.cell(tblM, 0, 0, "TF",     text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblM, 1, 0, "ESTADO", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblM, 2, 0, "FUERZA", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 0, 0, "TF",     text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 1, 0, "ESTADO", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 2, 0, "FUERZA", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     // 12 marcos.
     f_filaMatriz(tblM, 1,  "1m",      t1)
     f_filaMatriz(tblM, 2,  "3m",      t3)
@@ -727,9 +727,9 @@ if showMatriz and barstate.islast
     f_filaMatriz(tblM, 11, "Mensual", tM)
     f_filaMatriz(tblM, 12, "Anual",   tY)
     // Fila semaforo.
-    table.cell(tblM, 0, 13, "SEM.", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblM, 1, 13, semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
-    table.cell(tblM, 2, 13, str.tostring(domCount) + "/" + str.tostring(nVal), text_color = colTxt, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 0, 13, "SEM.", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblM, 1, 13, semaforo, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colSem, 0))
+    table.cell(tblM, 2, 13, str.tostring(domCount) + "/" + str.tostring(nVal), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colHead, 0))
 
 // =============================================================================
 // 12) RESUMEN TACTICO  (MARCO / TENDENCIA / MOTOR / CONFIRMACION / SCORE / LECTURA)
@@ -745,23 +745,23 @@ f_bgTend(string _t) =>
 
 // Helper para una fila tactica completa (6 columnas).
 f_filaTact(table _t, int _row, string _grupo, string _tend, string _motor, string _conf, float _score, string _lect, color _bg) =>
-    table.cell(_t, 0, _row, _grupo, text_color = colTxt, text_size = size.small, bgcolor = _bg)
-    table.cell(_t, 1, _row, _tend, text_color = f_colTend(_tend), text_size = size.small, bgcolor = f_bgTend(_tend))
-    table.cell(_t, 2, _row, _motor, text_color = colTxt, text_size = size.small, bgcolor = _bg)
-    table.cell(_t, 3, _row, _conf, text_color = colTxt, text_size = size.small, bgcolor = _bg)
-    table.cell(_t, 4, _row, str.tostring(_score), text_color = _score > 0 ? colAlc : _score < 0 ? colBaj : colAviso, text_size = size.small, bgcolor = _bg)
-    table.cell(_t, 5, _row, _lect, text_color = colTxt, text_size = size.small, bgcolor = _bg)
+    table.cell(_t, 0, _row, _grupo, text_color = colTxt, text_size = size.tiny, bgcolor = _bg)
+    table.cell(_t, 1, _row, _tend, text_color = f_colTend(_tend), text_size = size.tiny, bgcolor = f_bgTend(_tend))
+    table.cell(_t, 2, _row, _motor, text_color = colTxt, text_size = size.tiny, bgcolor = _bg)
+    table.cell(_t, 3, _row, _conf, text_color = colTxt, text_size = size.tiny, bgcolor = _bg)
+    table.cell(_t, 4, _row, str.tostring(_score), text_color = _score > 0 ? colAlc : _score < 0 ? colBaj : colAviso, text_size = size.tiny, bgcolor = _bg)
+    table.cell(_t, 5, _row, _lect, text_color = colTxt, text_size = size.tiny, bgcolor = _bg)
 
 if showTact and barstate.islast
     // 1 cabecera + 3 grupos = 4 filas.
     tblT := table.new(f_pos(posTact), 6, 4, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera (6 columnas exactas).
-    table.cell(tblT, 0, 0, "MARCO",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblT, 1, 0, "TENDENCIA",    text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblT, 2, 0, "MOTOR",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblT, 3, 0, "CONFIRMACION", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblT, 4, 0, "SCORE",        text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblT, 5, 0, "LECTURA",      text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 0, 0, "MARCO",        text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 1, 0, "TENDENCIA",    text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 2, 0, "MOTOR",        text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 3, 0, "CONFIRMACION", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 4, 0, "SCORE",        text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblT, 5, 0, "LECTURA",      text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     // Fila INTRADIA / SWING / MACRO.
     f_filaTact(tblT, 1, "INTRADIA", tendIntra, motorTxtIntra, confIntra, scoreIntraR, lectIntra, color.new(colFila, 0))
     f_filaTact(tblT, 2, "SWING",    tendSwing, motorTxtSwing, confSwing, scoreSwingR, lectSwing, color.new(colFondo, 0))
@@ -777,35 +777,35 @@ var table tblP = na
 if showPred and barstate.islast
     tblP := table.new(f_pos(posPred), 2, 10, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera.
-    table.cell(tblP, 0, 0, "PREDICCION", text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
-    table.cell(tblP, 1, 0, predDir, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    table.cell(tblP, 0, 0, "PREDICCION", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colSem, 0))
+    table.cell(tblP, 1, 0, predDir, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colSem, 0))
     // TF objetivo.
-    table.cell(tblP, 0, 1, "TF objetivo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 1, tfPred, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 1, "TF objetivo", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 1, tfPred, text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Semaforo.
-    table.cell(tblP, 0, 2, "Semaforo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 2, semaforo, text_color = color.white, text_size = size.small, bgcolor = color.new(colSem, 0))
+    table.cell(tblP, 0, 2, "Semaforo", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 2, semaforo, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colSem, 0))
     // Sesgo (tendencia del TF objetivo + su score).
-    table.cell(tblP, 0, 3, "Sesgo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 3, predTendObj + " (" + str.tostring(predScoreObj) + ")", text_color = f_colTend(predTendObj), text_size = size.small, bgcolor = f_bgTend(predTendObj))
+    table.cell(tblP, 0, 3, "Sesgo", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 3, predTendObj + " (" + str.tostring(predScoreObj) + ")", text_color = f_colTend(predTendObj), text_size = size.tiny, bgcolor = f_bgTend(predTendObj))
     // Objetivo.
-    table.cell(tblP, 0, 4, "Objetivo", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 4, str.tostring(objetivoPrincipal, format.mintick), text_color = predSign >= 0 ? colAlc : colBaj, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 4, "Objetivo", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 4, str.tostring(objetivoPrincipal, format.mintick), text_color = predSign >= 0 ? colAlc : colBaj, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Stop tecnico.
-    table.cell(tblP, 0, 5, "Stop tecnico", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 5, str.tostring(stopPrincipal, format.mintick), text_color = predSign >= 0 ? colBaj : colAlc, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 5, "Stop tecnico", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 5, str.tostring(stopPrincipal, format.mintick), text_color = predSign >= 0 ? colBaj : colAlc, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // R:R.
-    table.cell(tblP, 0, 6, "R:R", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 6, rrTxt, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 6, "R:R", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 6, rrTxt, text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Objetivos alternativos (sube / baja).
-    table.cell(tblP, 0, 7, "Sube / Baja", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 7, str.tostring(objetivoSube, format.mintick) + " / " + str.tostring(objetivoBaja, format.mintick), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 7, "Sube / Baja", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 7, str.tostring(objetivoSube, format.mintick) + " / " + str.tostring(objetivoBaja, format.mintick), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Confluencia (alineacion de los 3 grupos) + consejo.
-    table.cell(tblP, 0, 8, "Confluencia", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 8, confluencia + " - " + consejoConf, text_color = colConf, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 8, "Confluencia", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 8, confluencia + " - " + consejoConf, text_color = colConf, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Aviso.
-    table.cell(tblP, 0, 9, "Aviso", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 9, "Orientativa: PUEDE FALLAR. No es recomendacion.", text_color = colAviso, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 9, "Aviso", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 9, "Orientativa: PUEDE FALLAR. No es recomendacion.", text_color = colAviso, text_size = size.tiny, bgcolor = color.new(colFila, 0))
 
 // Etiqueta flotante OPCIONAL (off por defecto; el panel principal es la tabla).
 var label predLbl = na
@@ -844,25 +844,25 @@ var table tblE = na
 if showExtra and barstate.islast
     // 1 cabecera + 4 indicadores = 5 filas, 3 columnas.
     tblE := table.new(f_pos(posExtra), 3, 5, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
-    table.cell(tblE, 0, 0, "INDICADOR", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblE, 1, 0, "VALOR",     text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblE, 2, 0, "LECTURA",   text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblE, 0, 0, "INDICADOR", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblE, 1, 0, "VALOR",     text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblE, 2, 0, "LECTURA",   text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     // RSI.
-    table.cell(tblE, 0, 1, "RSI " + str.tostring(lenRSI), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblE, 1, 1, rsiTxt, text_color = rsiCol, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblE, 2, 1, rsiLec, text_color = rsiCol, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 0, 1, "RSI " + str.tostring(lenRSI), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 1, 1, rsiTxt, text_color = rsiCol, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 2, 1, rsiLec, text_color = rsiCol, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // MACD hist.
-    table.cell(tblE, 0, 2, "MACD hist", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblE, 1, 2, macdTxt, text_color = macdCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblE, 2, 2, macdLec, text_color = macdCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 0, 2, "MACD hist", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 1, 2, macdTxt, text_color = macdCol, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 2, 2, macdLec, text_color = macdCol, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
     // ATR.
-    table.cell(tblE, 0, 3, "ATR " + str.tostring(lenATR), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblE, 1, 3, atrTxt, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblE, 2, 3, atrLec, text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 0, 3, "ATR " + str.tostring(lenATR), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 1, 3, atrTxt, text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblE, 2, 3, atrLec, text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Dist SMA200.
-    table.cell(tblE, 0, 4, "Dist SMA200", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblE, 1, 4, distTxt, text_color = distCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblE, 2, 4, distLec, text_color = distCol, text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 0, 4, "Dist SMA200", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 1, 4, distTxt, text_color = distCol, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblE, 2, 4, distLec, text_color = distCol, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
 
 // =============================================================================
 // 15) TABLA DE FUNDAMENTALES  (request.financial — ultimo + anual + crecimiento)
@@ -879,35 +879,35 @@ if showFund and barstate.islast
     // 1 cabecera + 5 metricas + 1 mini-fila EBITDA 4T = 7 filas, 4 columnas.
     tblF := table.new(f_pos(posFund), 4, 7, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera.
-    table.cell(tblF, 0, 0, hayFund ? "FUNDAMENTALES" : "FUNDAMENTALES (n/d)", text_color = color.white, text_size = size.small, bgcolor = color.new(colFund, 0))
-    table.cell(tblF, 1, 0, "ULTIMO", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblF, 2, 0, "ANUAL",  text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblF, 3, 0, "CREC.",  text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 0, 0, hayFund ? "FUNDAMENTALES" : "FUNDAMENTALES (n/d)", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colFund, 0))
+    table.cell(tblF, 1, 0, "ULTIMO", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 2, 0, "ANUAL",  text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 3, 0, "CREC.",  text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     // Ingresos.
-    table.cell(tblF, 0, 1, "Ingresos", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 1, 1, f_money(revQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 2, 1, f_money(revY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 3, 1, f_growth(revY, revY1), text_color = f_growthCol(revY, revY1), text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 0, 1, "Ingresos", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 1, 1, f_money(revQ), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 2, 1, f_money(revY), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 3, 1, f_growth(revY, revY1), text_color = f_growthCol(revY, revY1), text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // EBITDA.
-    table.cell(tblF, 0, 2, "EBITDA", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblF, 1, 2, f_money(ebitdaQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblF, 2, 2, f_money(ebitdaY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblF, 3, 2, f_growth(ebitdaY, ebitdaY1), text_color = f_growthCol(ebitdaY, ebitdaY1), text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 0, 2, "EBITDA", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 1, 2, f_money(ebitdaQ), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 2, 2, f_money(ebitdaY), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 3, 2, f_growth(ebitdaY, ebitdaY1), text_color = f_growthCol(ebitdaY, ebitdaY1), text_size = size.tiny, bgcolor = color.new(colFondo, 0))
     // EBIT.
-    table.cell(tblF, 0, 3, "EBIT", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 1, 3, f_money(ebitQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 2, 3, f_money(ebitY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 3, 3, f_growth(ebitY, ebitY1), text_color = f_growthCol(ebitY, ebitY1), text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 0, 3, "EBIT", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 1, 3, f_money(ebitQ), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 2, 3, f_money(ebitY), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 3, 3, f_growth(ebitY, ebitY1), text_color = f_growthCol(ebitY, ebitY1), text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Beneficio Neto.
-    table.cell(tblF, 0, 4, "Neto", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblF, 1, 4, f_money(netQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblF, 2, 4, f_money(netY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFondo, 0))
-    table.cell(tblF, 3, 4, f_growth(netY, netY1), text_color = f_growthCol(netY, netY1), text_size = size.small, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 0, 4, "Neto", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 1, 4, f_money(netQ), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 2, 4, f_money(netY), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblF, 3, 4, f_growth(netY, netY1), text_color = f_growthCol(netY, netY1), text_size = size.tiny, bgcolor = color.new(colFondo, 0))
     // EPS.
-    table.cell(tblF, 0, 5, "EPS", text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 1, 5, f_num(epsQ), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 2, 5, f_num(epsY), text_color = colTxt, text_size = size.small, bgcolor = color.new(colFila, 0))
-    table.cell(tblF, 3, 5, f_growth(epsY, epsY1), text_color = f_growthCol(epsY, epsY1), text_size = size.small, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 0, 5, "EPS", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 1, 5, f_num(epsQ), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 2, 5, f_num(epsY), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblF, 3, 5, f_growth(epsY, epsY1), text_color = f_growthCol(epsY, epsY1), text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Mini-fila: EBITDA 4T (TTM, suma de los ultimos 4 trimestres).
     table.cell(tblF, 0, 6, "EBITDA 4T", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblF, 1, 6, f_money(ebitdaTTM), text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
@@ -990,18 +990,18 @@ cotEspCol = not hayCOT ? colTxtT : f_colF(cotNcNet)
 // Helper para una fila del panel institucional (3 columnas, fila alterna).
 f_filaInst(table _t, int _row, string _etq, string _val, string _est, color _col) =>
     _bgFila = _row % 2 == 0 ? color.new(colFila, 0) : color.new(colFondo, 0)
-    table.cell(_t, 0, _row, _etq, text_color = colTxt, text_size = size.small, bgcolor = _bgFila)
-    table.cell(_t, 1, _row, _val, text_color = colTxt, text_size = size.small, bgcolor = _bgFila)
-    table.cell(_t, 2, _row, _est, text_color = _col, text_size = size.small, bgcolor = _bgFila)
+    table.cell(_t, 0, _row, _etq, text_color = colTxt, text_size = size.tiny, bgcolor = _bgFila)
+    table.cell(_t, 1, _row, _val, text_color = colTxt, text_size = size.tiny, bgcolor = _bgFila)
+    table.cell(_t, 2, _row, _est, text_color = _col, text_size = size.tiny, bgcolor = _bgFila)
 
 var table tblI = na
 if showInst and barstate.islast
     // 1 cabecera + 12 metricas + 1 fila lectura = 14 filas, 3 columnas.
     tblI := table.new(f_pos(posInst), 3, 14, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera.
-    table.cell(tblI, 0, 0, "INSTITUCIONAL", text_color = color.white, text_size = size.small, bgcolor = color.new(colFund, 0))
-    table.cell(tblI, 1, 0, "VALOR",  text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
-    table.cell(tblI, 2, 0, "ESTADO", text_color = colTxtT, text_size = size.small, bgcolor = color.new(colHead, 0))
+    table.cell(tblI, 0, 0, "INSTITUCIONAL", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colFund, 0))
+    table.cell(tblI, 1, 0, "VALOR",  text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblI, 2, 0, "ESTADO", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     // Filas internos de mercado.
     f_filaInst(tblI, 1,  "VIX",          vixTxt,  vixEst,  vixCol)
     f_filaInst(tblI, 2,  "Put/Call T/Eq",pcTxt,   pcEst,   pcCol)
@@ -1018,9 +1018,9 @@ if showInst and barstate.islast
     f_filaInst(tblI, 11, "COT comercial",   cotComTxt, hayCOT ? "Cobertura" : "Sin COT", cotComCol)
     f_filaInst(tblI, 12, "COT especulador", cotEspTxt, hayCOT ? "Especuladores" : "Sin COT", cotEspCol)
     // Fila resumen: Lectura institucional (RIESGO-ON / RIESGO-OFF / MIXTO).
-    table.cell(tblI, 0, 13, "Lectura", text_color = color.white, text_size = size.small, bgcolor = color.new(colLectInst, 0))
-    table.cell(tblI, 1, 13, "RIESGO", text_color = color.white, text_size = size.small, bgcolor = color.new(colLectInst, 0))
-    table.cell(tblI, 2, 13, lecturaInstFull, text_color = color.white, text_size = size.small, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 0, 13, "Lectura", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 1, 13, "RIESGO", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 2, 13, lecturaInstFull, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
 
 // =============================================================================
 // 16) PLOTS DE CONTEXTO  (no tapan el precio)
