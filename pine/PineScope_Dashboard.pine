@@ -505,23 +505,53 @@ if barstate.islast and showSR
 // R:R se calcula con los objetivos y un stop tecnico (el lado contrario).
 // =============================================================================
 atrChart = ta.atr(lenATR)
-objetivoSube = not na(resLevel) ? resLevel : close + atrMult * atrChart
-objetivoBaja = not na(supLevel) ? supLevel : close - atrMult * atrChart
+// Piso de ATR: evita objetivos en na (warmup) o pegados al precio (ATR=0 / precio plano).
+atrSafe = (na(atrChart) or atrChart <= 0) ? close * 0.001 : atrChart
+// Ganancia minima del objetivo = 1 ATR (evita objetivos pegados o "tiny gain").
+minDist = atrSafe * 1.0
+// OBJETIVOS: usa la resistencia/soporte por pivote SOLO si esta del lado correcto y
+// a >= minDist; si no, objetivo por ATR. Asi NUNCA queda pegado, pasado ni en na.
+objetivoSube = (not na(resLevel) and resLevel > close + minDist) ? resLevel : close + atrMult * atrSafe
+objetivoBaja = (not na(supLevel) and supLevel < close - minDist) ? supLevel : close - atrMult * atrSafe
+
+// ROMPIMIENTOS recientes (<= 2 velas): el precio cruzo la resistencia (alza) o el soporte (baja).
+rompeAlzaEv = not na(resLevel[1]) and close > resLevel[1] and close[1] <= resLevel[1]
+rompeBajaEv = not na(supLevel[1]) and close < supLevel[1] and close[1] >= supLevel[1]
+barsAlza = ta.barssince(rompeAlzaEv)
+barsBaja = ta.barssince(rompeBajaEv)
+rompeAlza = not na(barsAlza) and barsAlza <= 2 and (na(barsBaja) or barsAlza <= barsBaja)
+rompeBaja = not na(barsBaja) and barsBaja <= 2 and (na(barsAlza) or barsBaja <  barsAlza)
+// Cerca de un nivel (<= 0.3 ATR) sin romperlo -> "EN RESISTENCIA / EN SOPORTE".
+cercaRes = not na(resLevel) and close < resLevel and (resLevel - close) <= atrSafe * 0.3 and not rompeAlza
+cercaSup = not na(supLevel) and close > supLevel and (close - supLevel) <= atrSafe * 0.3 and not rompeBaja
 
 // Sesgo segun el TF objetivo elegido por el usuario.
 predTendObj = tfPred == "Intradia (1m-30m)" ? tendIntra : tfPred == "Swing (1H-Diario)" ? tendSwing : tfPred == "Macro (Sem-Anual)" ? tendMacro : domTrend
 predScoreObj = tfPred == "Intradia (1m-30m)" ? scoreIntraR : tfPred == "Swing (1H-Diario)" ? scoreSwingR : tfPred == "Macro (Sem-Anual)" ? scoreMacroR : scoreGlobal * 1.0
 predSign = str.contains(predTendObj, "ALCISTA") ? 1 : str.contains(predTendObj, "BAJISTA") ? -1 : 0
-predDir  = predSign > 0 ? "PROBABLE SUBIDA" : predSign < 0 ? "PROBABLE BAJADA" : "LATERAL / INCIERTO"
+// DIRECCION EFECTIVA: rompimiento MANDA; pegado a un nivel = NEUTRAL; si no, la tendencia.
+dirEff = rompeAlza ? 1 : rompeBaja ? -1 : (cercaRes or cercaSup) ? 0 : predSign
+predDir = rompeAlza ? "POSIBLE ROMPIMIENTO ALCISTA" : rompeBaja ? "POSIBLE ROMPIMIENTO BAJISTA" : cercaRes ? "EN RESISTENCIA (cuidado)" : cercaSup ? "EN SOPORTE (rebote?)" : predSign > 0 ? "PROBABLE SUBIDA" : predSign < 0 ? "PROBABLE BAJADA" : "LATERAL / INCIERTO"
 
-// R:R: recorrido a favor / riesgo al stop contrario (en multiplos del recorrido).
+// OBJETIVO y STOP coherentes con el ESTADO (no saltan el nivel avisado ni fuerzan lado en lateral).
+objetivoPrincipal = rompeAlza ? objetivoSube : rompeBaja ? objetivoBaja : cercaRes ? resLevel : cercaSup ? objetivoSube : predSign > 0 ? objetivoSube : predSign < 0 ? objetivoBaja : na
+stopPrincipal     = rompeAlza ? objetivoBaja : rompeBaja ? objetivoSube : cercaRes ? objetivoBaja : cercaSup ? supLevel : predSign > 0 ? objetivoBaja : predSign < 0 ? objetivoSube : na
+
+// Color del objetivo/stop (neutral cuando lateral o pegado a un nivel).
+dirCol  = rompeAlza ? 1 : rompeBaja ? -1 : (cercaRes or cercaSup) ? 0 : predSign
+colObj  = dirCol > 0 ? colAlc : dirCol < 0 ? colBaj : colAviso
+colStop = dirCol > 0 ? colBaj : dirCol < 0 ? colAlc : colAviso
+
+// R:R con la direccion efectiva (n/d si lateral/neutral o recorrido invalido).
 recSube = objetivoSube - close
 recBaja = close - objetivoBaja
-rr = predSign > 0 ? (recBaja > 0 ? recSube / recBaja : na) : predSign < 0 ? (recSube > 0 ? recBaja / recSube : na) : na
+rr = dirEff > 0 ? (recBaja > 0 ? recSube / recBaja : na) : dirEff < 0 ? (recSube > 0 ? recBaja / recSube : na) : na
 rrTxt = na(rr) ? "n/d" : str.tostring(math.round(rr * 100) / 100) + " : 1"
 
-objetivoPrincipal = predSign >= 0 ? objetivoSube : objetivoBaja
-stopPrincipal     = predSign >= 0 ? objetivoBaja : objetivoSube
+// Textos seguros: "-" cuando no hay objetivo claro; el sesgo lleva nota si hay rompimiento.
+objTxt   = na(objetivoPrincipal) ? "-" : str.tostring(objetivoPrincipal, format.mintick)
+stopTxt  = na(stopPrincipal) ? "-" : str.tostring(stopPrincipal, format.mintick)
+sesgoTxt = predTendObj + (rompeAlza ? " (rompe al alza)" : rompeBaja ? " (rompe a la baja)" : "") + " (" + str.tostring(predScoreObj) + ")"
 
 // --- CONFLUENCIA EJECUTIVA: alineacion de los 3 grupos (INTRADIA/SWING/MACRO) ---
 // Se calcula aqui (antes de pintar la tabla de prediccion) para poder mostrarla
@@ -815,13 +845,13 @@ if showPred and barstate.islast
     table.cell(tblP, 1, 2, semaforo, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colSem, 0))
     // Sesgo (tendencia del TF objetivo + su score).
     table.cell(tblP, 0, 3, "Sesgo", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 3, predTendObj + " (" + str.tostring(predScoreObj) + ")", text_color = f_colTend(predTendObj), text_size = size.tiny, bgcolor = f_bgTend(predTendObj))
+    table.cell(tblP, 1, 3, sesgoTxt, text_color = f_colTend(predTendObj), text_size = size.tiny, bgcolor = f_bgTend(predTendObj))
     // Objetivo.
     table.cell(tblP, 0, 4, "Objetivo", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 4, str.tostring(objetivoPrincipal, format.mintick), text_color = predSign >= 0 ? colAlc : colBaj, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 1, 4, objTxt, text_color = colObj, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // Stop tecnico.
     table.cell(tblP, 0, 5, "Stop tecnico", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 5, str.tostring(stopPrincipal, format.mintick), text_color = predSign >= 0 ? colBaj : colAlc, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 1, 5, stopTxt, text_color = colStop, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     // R:R.
     table.cell(tblP, 0, 6, "R:R", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblP, 1, 6, rrTxt, text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
@@ -839,7 +869,7 @@ if showPred and barstate.islast
 var label predLbl = na
 if barstate.islast and showPredLbl
     label.delete(predLbl)
-    txtPred = "SEMAFORO " + semaforo + "  |  " + predDir + "\n" + "TF objetivo: " + tfPred + " -> " + predTendObj + " (" + str.tostring(predScoreObj) + ")\n" + "Objetivo: " + str.tostring(objetivoPrincipal, format.mintick) + "  |  Stop: " + str.tostring(stopPrincipal, format.mintick) + "  |  R:R " + rrTxt + "\n" + "Confluencia: " + confluencia + " - " + consejoConf + "\n" + "Orientativa: PUEDE FALLAR. No es recomendacion."
+    txtPred = "SEMAFORO " + semaforo + "  |  " + predDir + "\n" + "TF objetivo: " + tfPred + " -> " + predTendObj + " (" + str.tostring(predScoreObj) + ")\n" + "Objetivo: " + objTxt + "  |  Stop: " + stopTxt + "  |  R:R " + rrTxt + "\n" + "Confluencia: " + confluencia + " - " + consejoConf + "\n" + "Orientativa: PUEDE FALLAR. No es recomendacion."
     predLbl := label.new(bar_index, high, txtPred, style = label.style_label_lower_right, textcolor = color.white, color = color.new(colSem, 12), size = size.normal)
 
 // =============================================================================
@@ -1137,7 +1167,7 @@ if emitAI and barstate.isconfirmed
 
     nivelesBlock = "{" + f_q("soporte") + ":" + (na(supLevel) ? "null" : str.tostring(supLevel, format.mintick)) + "," + f_q("resistencia") + ":" + (na(resLevel) ? "null" : str.tostring(resLevel, format.mintick)) + "}"
 
-    prediccionBlock = "{" + f_q("tfObjetivo") + ":" + f_q(tfPred) + "," + f_q("sesgo") + ":" + f_q(predTendObj) + "," + f_q("objetivo") + ":" + str.tostring(objetivoPrincipal, format.mintick) + "," + f_q("stop") + ":" + str.tostring(stopPrincipal, format.mintick) + "," + f_q("rr") + ":" + (na(rr) ? "null" : str.tostring(math.round(rr * 100) / 100)) + "," + f_q("objetivoSube") + ":" + str.tostring(objetivoSube, format.mintick) + "," + f_q("objetivoBaja") + ":" + str.tostring(objetivoBaja, format.mintick) + "," + f_q("confluencia") + ":" + f_q(confluencia) + "," + f_q("consejo") + ":" + f_q(consejoConf) + "}"
+    prediccionBlock = "{" + f_q("tfObjetivo") + ":" + f_q(tfPred) + "," + f_q("sesgo") + ":" + f_q(predTendObj) + "," + f_q("objetivo") + ":" + (na(objetivoPrincipal) ? "null" : str.tostring(objetivoPrincipal, format.mintick)) + "," + f_q("stop") + ":" + (na(stopPrincipal) ? "null" : str.tostring(stopPrincipal, format.mintick)) + "," + f_q("rr") + ":" + (na(rr) ? "null" : str.tostring(math.round(rr * 100) / 100)) + "," + f_q("objetivoSube") + ":" + str.tostring(objetivoSube, format.mintick) + "," + f_q("objetivoBaja") + ":" + str.tostring(objetivoBaja, format.mintick) + "," + f_q("confluencia") + ":" + f_q(confluencia) + "," + f_q("consejo") + ":" + f_q(consejoConf) + "}"
 
     fundamentalesBlock = "{" + f_q("hayDatos") + ":" + (hayFund ? "true" : "false") + "," + f_q("ingresosQ") + ":" + f_jmoney(revQ) + "," + f_q("ingresosY") + ":" + f_jmoney(revY) + "," + f_q("ebitdaQ") + ":" + f_jmoney(ebitdaQ) + "," + f_q("ebitdaY") + ":" + f_jmoney(ebitdaY) + "," + f_q("ebitdaTTM") + ":" + f_jmoney(ebitdaTTM) + "," + f_q("ebitQ") + ":" + f_jmoney(ebitQ) + "," + f_q("ebitY") + ":" + f_jmoney(ebitY) + "," + f_q("netoQ") + ":" + f_jmoney(netQ) + "," + f_q("netoY") + ":" + f_jmoney(netY) + "," + f_q("epsQ") + ":" + f_jnum(epsQ) + "," + f_q("epsY") + ":" + f_jnum(epsY) + "}"
 
