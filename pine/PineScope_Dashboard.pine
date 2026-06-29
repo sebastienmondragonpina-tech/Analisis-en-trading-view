@@ -110,15 +110,15 @@ atrMult  = input.float(1.5, "Multiplo de ATR para el objetivo", minval = 0.1, st
 
 grpExtra = "Indicadores EXTRA (RSI / MACD / ATR / dist SMA200)"
 showExtra = input.bool(true, "Mostrar tabla de indicadores extra", group = grpExtra)
-posExtra  = input.string("Abajo izquierda", "Posicion extra", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpExtra)
+posExtra  = input.string("Centro izquierda", "Posicion extra", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpExtra)
 
 grpFund = "FUNDAMENTALES (request.financial)"
-showFund = input.bool(true, "Mostrar tabla de fundamentales", group = grpFund)
+showFund = input.bool(false, "Mostrar tabla de fundamentales aparte (ya van en el panel de abajo)", group = grpFund)
 posFund  = input.string("Arriba izquierda", "Posicion fundamentales", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpFund)
 
-grpInst = "INSTITUCIONAL / FLUJO (internos + huella volumen + COT)"
-showInst = input.bool(true, "Mostrar panel institucional / flujo", group = grpInst)
-posInst  = input.string("Centro izquierda", "Posicion institucional", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpInst)
+grpInst = "PANEL DE ABAJO: Fundamental + Flujo (Ventas/EBITDA/EBIT/Neto/EPS/PE + presion + volumen + riesgo)"
+showInst = input.bool(true, "Mostrar panel Fundamental + Flujo (abajo)", group = grpInst)
+posInst  = input.string("Abajo izquierda", "Posicion panel abajo", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpInst)
 lenRVOL  = input.int(20, "RVOL: media de volumen", minval = 2, group = grpInst)
 lenMFI   = input.int(14, "MFI: periodo", minval = 2, group = grpInst)
 lenCMF   = input.int(20, "CMF: periodo (Chaikin Money Flow)", minval = 2, group = grpInst)
@@ -689,6 +689,16 @@ lecturaInst = votoRiesgo >= 2 ? "RIESGO-ON (apetito)" : votoRiesgo <= -2 ? "RIES
 lecturaInstFull = lecturaInst + (rvolFuerte ? " | volumen anormal" : "")
 colLectInst = votoRiesgo >= 2 ? colAlc : votoRiesgo <= -2 ? colBaj : colAviso
 
+// --- NUEVO (para el panel de abajo): P/E nativo + PRESION compra/venta + texto RVOL ---
+// P/E = precio / EPS anual (na si no hay EPS). Presion = voto de CMF + pendiente OBV + Acum/Dist.
+peVal = (na(epsY) or epsY <= 0) ? na : close / epsY
+presionVoto = (na(cmfVal) ? 0 : cmfVal > 0.05 ? 1 : cmfVal < -0.05 ? -1 : 0) + (na(obvPend) ? 0 : obvPend > 0 ? 1 : obvPend < 0 ? -1 : 0) + (na(adPend) ? 0 : adPend > 0 ? 1 : adPend < 0 ? -1 : 0)
+presionTxt = presionVoto >= 2 ? "COMPRA fuerte" : presionVoto == 1 ? "Compra" : presionVoto <= -2 ? "VENTA fuerte" : presionVoto == -1 ? "Venta" : "Neutro"
+presionCol = presionVoto >= 1 ? colAlc : presionVoto <= -1 ? colBaj : colAviso
+rvolValTxt = na(rvol) ? "n/d" : str.tostring(rvol, "#.##") + "x"
+rvolEstTxt = na(rvol) ? "n/d" : rvol > 1.5 ? "ANORMAL (fuerte)" : rvol > 1.0 ? "alto" : "normal"
+rvolEstCol = na(rvol) ? colTxtT : rvol > 1.5 ? colAviso : rvol > 1.0 ? colAlc : colTxtT
+
 // =============================================================================
 // 10) POSICIONES DE TABLA (input -> position.*)
 // =============================================================================
@@ -997,33 +1007,57 @@ f_filaInst(table _t, int _row, string _etq, string _val, string _est, color _col
     table.cell(_t, 1, _row, _val, text_color = colTxt, text_size = size.tiny, bgcolor = _bgFila)
     table.cell(_t, 2, _row, _est, text_color = _col, text_size = size.tiny, bgcolor = _bgFila)
 
+// =============================================================================
+// PANEL DE ABAJO: FUNDAMENTAL + FLUJO
+// Junta los fundamentales (Ventas/EBITDA/EBIT/Neto/EPS + crecimiento YoY) con
+// P/E, presion compra/venta, volumen anormal (RVOL) y la lectura de RIESGO.
+// Se quitaron del PANEL: VIX, Put/Call, Amplitud, Vol U/D, OBV, Acum/Dist, MFI,
+// CMF, VWAP y COT (sus calculos siguen vivos por dentro para la lectura RIESGO).
+// =============================================================================
+f_filaFund(table _t, int _row, string _name, string _v1, string _v2, string _v3, color _c3) =>
+    _bg = _row % 2 == 0 ? color.new(colFila, 0) : color.new(colFondo, 0)
+    table.cell(_t, 0, _row, _name, text_color = colTxt, text_size = size.tiny, bgcolor = _bg)
+    table.cell(_t, 1, _row, _v1,   text_color = colTxt, text_size = size.tiny, bgcolor = _bg)
+    table.cell(_t, 2, _row, _v2,   text_color = colTxt, text_size = size.tiny, bgcolor = _bg)
+    table.cell(_t, 3, _row, _v3,   text_color = _c3,    text_size = size.tiny, bgcolor = _bg)
+
 var table tblI = na
 if showInst and barstate.islast
-    // 1 cabecera + 12 metricas + 1 fila lectura = 14 filas, 3 columnas.
-    tblI := table.new(f_pos(posInst), 3, 14, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
-    // Cabecera.
-    table.cell(tblI, 0, 0, "INSTITUCIONAL", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colFund, 0))
-    table.cell(tblI, 1, 0, "VALOR",  text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    table.cell(tblI, 2, 0, "ESTADO", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    // Filas internos de mercado.
-    f_filaInst(tblI, 1,  "VIX",          vixTxt,  vixEst,  vixCol)
-    f_filaInst(tblI, 2,  "Put/Call T/Eq",pcTxt,   pcEst,   pcCol)
-    f_filaInst(tblI, 3,  "Amplitud A/T", ampTxt,  ampEst,  ampCol)
-    f_filaInst(tblI, 4,  "Vol U/D",      volTxt,  volEst,  volCol)
-    // Filas huella de volumen nativa del simbolo.
-    f_filaInst(tblI, 5,  "RVOL",         rvolTxt, rvolEst, rvolCol)
-    f_filaInst(tblI, 6,  "OBV",          f_big(obvVal), obvTxt, obvCol)
-    f_filaInst(tblI, 7,  "Acum/Dist",    f_big(adVal),  adTxt,  adCol)
-    f_filaInst(tblI, 8,  "MFI " + str.tostring(lenMFI), mfiTxt, mfiEst, mfiCol)
-    f_filaInst(tblI, 9,  "CMF " + str.tostring(lenCMF), cmfTxt, cmfEst, cmfCol)
-    f_filaInst(tblI, 10, "VWAP",         vwapTxt, vwapEst, vwapCol)
-    // Filas COT (comercial = cobertura institucional, especulador = grandes fondos).
-    f_filaInst(tblI, 11, "COT comercial",   cotComTxt, hayCOT ? "Cobertura" : "Sin COT", cotComCol)
-    f_filaInst(tblI, 12, "COT especulador", cotEspTxt, hayCOT ? "Especuladores" : "Sin COT", cotEspCol)
-    // Fila resumen: Lectura institucional (RIESGO-ON / RIESGO-OFF / MIXTO).
-    table.cell(tblI, 0, 13, "Lectura", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
-    table.cell(tblI, 1, 13, "RIESGO", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
-    table.cell(tblI, 2, 13, lecturaInstFull, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
+    // 1 cabecera + 6 fundamentales + P/E + Presion + Volumen + RIESGO = 11 filas, 4 col.
+    tblI := table.new(f_pos(posInst), 4, 11, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    table.cell(tblI, 0, 0, "FUND + FLUJO", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colFund, 0))
+    table.cell(tblI, 1, 0, "Trim",  text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblI, 2, 0, "Anual", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblI, 3, 0, "Crec",  text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    f_filaFund(tblI, 1, "Ventas", f_money(revQ),    f_money(revY),    f_growth(revY, revY1),       f_growthCol(revY, revY1))
+    f_filaFund(tblI, 2, "EBITDA", f_money(ebitdaQ), f_money(ebitdaY), f_growth(ebitdaY, ebitdaY1), f_growthCol(ebitdaY, ebitdaY1))
+    f_filaFund(tblI, 3, "EBIT",   f_money(ebitQ),   f_money(ebitY),   f_growth(ebitY, ebitY1),     f_growthCol(ebitY, ebitY1))
+    f_filaFund(tblI, 4, "Neto",   f_money(netQ),    f_money(netY),    f_growth(netY, netY1),       f_growthCol(netY, netY1))
+    f_filaFund(tblI, 5, "EPS",    f_num(epsQ),      f_num(epsY),      f_growth(epsY, epsY1),       f_growthCol(epsY, epsY1))
+    f_filaFund(tblI, 6, "EBITDA 4T", f_money(ebitdaTTM), "TTM(4Q)",   f_growth(ebitdaQ, ebitdaQ4), f_growthCol(ebitdaQ, ebitdaQ4))
+    // P/E (precio / EPS anual).
+    _bgPE = color.new(colFila, 0)
+    table.cell(tblI, 0, 7, "P/E", text_color = colTxt, text_size = size.tiny, bgcolor = _bgPE)
+    table.cell(tblI, 1, 7, f_num(peVal), text_color = colTxt, text_size = size.tiny, bgcolor = _bgPE)
+    table.cell(tblI, 2, 7, "", text_color = colTxt, text_size = size.tiny, bgcolor = _bgPE)
+    table.cell(tblI, 3, 7, "", text_color = colTxt, text_size = size.tiny, bgcolor = _bgPE)
+    // Presion compra/venta (CMF + pendiente OBV + Acum/Dist).
+    _bgPr = color.new(colFondo, 0)
+    table.cell(tblI, 0, 8, "Presion C/V", text_color = colTxt, text_size = size.tiny, bgcolor = _bgPr)
+    table.cell(tblI, 1, 8, presionTxt, text_color = presionCol, text_size = size.tiny, bgcolor = _bgPr)
+    table.cell(tblI, 2, 8, "", text_color = colTxt, text_size = size.tiny, bgcolor = _bgPr)
+    table.cell(tblI, 3, 8, "", text_color = colTxt, text_size = size.tiny, bgcolor = _bgPr)
+    // Volumen (RVOL = volumen anormal = actividad institucional).
+    _bgVo = color.new(colFila, 0)
+    table.cell(tblI, 0, 9, "Volumen", text_color = colTxt, text_size = size.tiny, bgcolor = _bgVo)
+    table.cell(tblI, 1, 9, rvolValTxt, text_color = colTxt, text_size = size.tiny, bgcolor = _bgVo)
+    table.cell(tblI, 2, 9, "", text_color = colTxt, text_size = size.tiny, bgcolor = _bgVo)
+    table.cell(tblI, 3, 9, rvolEstTxt, text_color = rvolEstCol, text_size = size.tiny, bgcolor = _bgVo)
+    // Lectura de RIESGO (resume los internos que ya NO se muestran fila a fila).
+    table.cell(tblI, 0, 10, "RIESGO", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 1, 10, lecturaInst, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 2, 10, "", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
+    table.cell(tblI, 3, 10, rvolFuerte ? "vol. anormal" : "", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
 
 // =============================================================================
 // 16) PLOTS DE CONTEXTO  (no tapan el precio)
