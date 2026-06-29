@@ -540,26 +540,29 @@ consejoConf = nGruposAlc == 3 ? "Operar a favor: largos en retroceso" : nGruposB
 // --- Ingresos (Total Revenue) ---
 revQ  = request.financial(syminfo.tickerid, "TOTAL_REVENUE", "FQ", ignore_invalid_symbol = true)
 revY  = request.financial(syminfo.tickerid, "TOTAL_REVENUE", "FY", ignore_invalid_symbol = true)
-revY1 = request.financial(syminfo.tickerid, "TOTAL_REVENUE", "FY", ignore_invalid_symbol = true)[1]
+// FIX: el "ano/trimestre anterior" se lee con ta.valuewhen sobre los CAMBIOS del
+// dato (cada nuevo reporte), NO con [1] (que es 1 VELA atras = mismo valor -> 0%).
+revY1 = ta.valuewhen(ta.change(revY) != 0, revY, 1)
 // --- EBITDA ---
 ebitdaQ  = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)
-ebitdaQ1 = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)[1]
-ebitdaQ2 = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)[2]
-ebitdaQ3 = request.financial(syminfo.tickerid, "EBITDA", "FQ", ignore_invalid_symbol = true)[3]
+ebitdaQ1 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 1)   // trimestre anterior
+ebitdaQ2 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 2)   // hace 2 trimestres
+ebitdaQ3 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 3)   // hace 3 trimestres
+ebitdaQ4 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 4)   // mismo trimestre del ano pasado (YoY)
 ebitdaY  = request.financial(syminfo.tickerid, "EBITDA", "FY", ignore_invalid_symbol = true)
-ebitdaY1 = request.financial(syminfo.tickerid, "EBITDA", "FY", ignore_invalid_symbol = true)[1]
+ebitdaY1 = ta.valuewhen(ta.change(ebitdaY) != 0, ebitdaY, 1)
 // --- EBIT (Operating Income) ---
 ebitQ = request.financial(syminfo.tickerid, "OPER_INCOME", "FQ", ignore_invalid_symbol = true)
 ebitY = request.financial(syminfo.tickerid, "OPER_INCOME", "FY", ignore_invalid_symbol = true)
-ebitY1 = request.financial(syminfo.tickerid, "OPER_INCOME", "FY", ignore_invalid_symbol = true)[1]
+ebitY1 = ta.valuewhen(ta.change(ebitY) != 0, ebitY, 1)
 // --- Beneficio Neto (Net Income) ---
 netQ = request.financial(syminfo.tickerid, "NET_INCOME", "FQ", ignore_invalid_symbol = true)
 netY = request.financial(syminfo.tickerid, "NET_INCOME", "FY", ignore_invalid_symbol = true)
-netY1 = request.financial(syminfo.tickerid, "NET_INCOME", "FY", ignore_invalid_symbol = true)[1]
+netY1 = ta.valuewhen(ta.change(netY) != 0, netY, 1)
 // --- EPS (Earnings per Share, basic) ---
 epsQ = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FQ", ignore_invalid_symbol = true)
 epsY = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FY", ignore_invalid_symbol = true)
-epsY1 = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_BASIC", "FY", ignore_invalid_symbol = true)[1]
+epsY1 = ta.valuewhen(ta.change(epsY) != 0, epsY, 1)
 
 // Hay fundamentales? (al menos ingresos o EPS no-na)
 hayFund = not na(revY) or not na(epsY) or not na(netY)
@@ -912,7 +915,7 @@ if showFund and barstate.islast
     table.cell(tblF, 0, 6, "EBITDA 4T", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblF, 1, 6, f_money(ebitdaTTM), text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblF, 2, 6, "TTM (4Q)", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    table.cell(tblF, 3, 6, f_growth(ebitdaQ, ebitdaQ3), text_color = f_growthCol(ebitdaQ, ebitdaQ3), text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 3, 6, f_growth(ebitdaQ, ebitdaQ4), text_color = f_growthCol(ebitdaQ, ebitdaQ4), text_size = size.tiny, bgcolor = color.new(colHead, 0))
 
 // =============================================================================
 // 15B) TABLA INSTITUCIONAL / FLUJO  (VIX / Put-Call / Amplitud / Vol / OBV /
