@@ -116,6 +116,10 @@ grpFund = "FUNDAMENTALES (request.financial)"
 showFund = input.bool(false, "Mostrar tabla de fundamentales aparte (ya van en el panel de abajo)", group = grpFund)
 posFund  = input.string("Arriba izquierda", "Posicion fundamentales", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpFund)
 
+grpRev = "INGRESOS - trayectoria (min/max + CAGR 10A + cambio total)"
+showRev = input.bool(true, "Mostrar tabla de trayectoria de ingresos", group = grpRev)
+posRev  = input.string("Arriba izquierda", "Posicion ingresos", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpRev)
+
 grpInst = "PANEL DE ABAJO: Fundamental + Flujo (Ventas/EBITDA/EBIT/Neto/EPS/PE + presion + volumen + riesgo)"
 showInst = input.bool(true, "Mostrar panel Fundamental + Flujo (abajo)", group = grpInst)
 posInst  = input.string("Abajo izquierda", "Posicion panel abajo", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpInst)
@@ -699,6 +703,17 @@ rvolValTxt = na(rvol) ? "n/d" : str.tostring(rvol, "#.##") + "x"
 rvolEstTxt = na(rvol) ? "n/d" : rvol > 1.5 ? "ANORMAL (fuerte)" : rvol > 1.0 ? "alto" : "normal"
 rvolEstCol = na(rvol) ? colTxtT : rvol > 1.5 ? colAviso : rvol > 1.0 ? colAlc : colTxtT
 
+// --- TRAYECTORIA DE INGRESOS (estilo grafico Intrinsiqq: min/max, CAGR 10A, cambio total) ---
+// revMin/revMax = minimo y maximo historicos del ingreso trimestral (corren en cada vela).
+var float revMin = na
+var float revMax = na
+revMin := na(revQ) ? revMin : na(revMin) ? revQ : math.min(revMin, revQ)
+revMax := na(revQ) ? revMax : na(revMax) ? revQ : math.max(revMax, revQ)
+// Ingreso de hace ~10 anos (40 reportes trimestrales atras) para el CAGR.
+revQ10    = ta.valuewhen(ta.change(revQ) != 0, revQ, 40)
+revCagr   = (na(revQ) or na(revQ10) or revQ10 <= 0) ? na : (math.pow(revQ / revQ10, 1.0 / 10.0) - 1) * 100
+revChgTot = (na(revQ) or na(revMin) or revMin <= 0) ? na : (revQ - revMin) / revMin * 100
+
 // =============================================================================
 // 10) POSICIONES DE TABLA (input -> position.*)
 // =============================================================================
@@ -1058,6 +1073,27 @@ if showInst and barstate.islast
     table.cell(tblI, 1, 10, lecturaInst, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
     table.cell(tblI, 2, 10, "", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
     table.cell(tblI, 3, 10, rvolFuerte ? "vol. anormal" : "", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colLectInst, 0))
+
+// =============================================================================
+// PANEL TRAYECTORIA DE INGRESOS  (min/max historico + CAGR 10A + cambio total)
+// =============================================================================
+var table tblRev = na
+if showRev and barstate.islast
+    tblRev := table.new(f_pos(posRev), 2, 6, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    table.cell(tblRev, 0, 0, "INGRESOS " + syminfo.ticker, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colFund, 0))
+    table.cell(tblRev, 1, 0, "10 anos", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblRev, 0, 1, "Ultimo (trim)", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblRev, 1, 1, f_money(revQ), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblRev, 0, 2, "Minimo", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblRev, 1, 2, f_money(revMin), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblRev, 0, 3, "Maximo", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblRev, 1, 3, f_money(revMax), text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    revCagrCol = na(revCagr) ? colTxtT : revCagr >= 0 ? colAlc : colBaj
+    table.cell(tblRev, 0, 4, "CAGR 10A", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    table.cell(tblRev, 1, 4, na(revCagr) ? "n/d" : (revCagr >= 0 ? "+" : "") + str.tostring(math.round(revCagr * 10) / 10) + "%", text_color = revCagrCol, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
+    revChgCol = na(revChgTot) ? colTxtT : revChgTot >= 0 ? colAlc : colBaj
+    table.cell(tblRev, 0, 5, "Cambio total", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblRev, 1, 5, na(revChgTot) ? "n/d" : (revChgTot >= 0 ? "+" : "") + str.tostring(math.round(revChgTot)) + "%", text_color = revChgCol, text_size = size.tiny, bgcolor = color.new(colFila, 0))
 
 // =============================================================================
 // 16) PLOTS DE CONTEXTO  (no tapan el precio)
