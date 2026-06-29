@@ -93,7 +93,6 @@ umbralFuerte = input.float(3.0, "Umbral tendencia FUERTE (|score|)", minval = 0.
 umbralCero   = input.float(0.5, "Umbral zona NEUTRAL (|score|)", minval = 0.0, step = 0.25, group = grpTact)
 
 grpSem = "Semaforo"
-showSem   = input.bool(true, "Mostrar semaforo / veredicto", group = grpSem)
 threshSem = input.int(4, "Umbral semaforo (|score global|)", minval = 1, group = grpSem)
 
 grpSR = "Soportes / Resistencias (pivotes)"
@@ -307,8 +306,10 @@ f_isBaj(int _sc) => _sc < 0 ? 1 : 0
 nAlc = f_isAlc(t1)+f_isAlc(t3)+f_isAlc(t5)+f_isAlc(t15)+f_isAlc(t30)+f_isAlc(t60)+f_isAlc(t120)+f_isAlc(t240)+f_isAlc(tD)+f_isAlc(tW)+f_isAlc(tM)+f_isAlc(tY)
 nBaj = f_isBaj(t1)+f_isBaj(t3)+f_isBaj(t5)+f_isBaj(t15)+f_isBaj(t30)+f_isBaj(t60)+f_isBaj(t120)+f_isBaj(t240)+f_isBaj(tD)+f_isBaj(tW)+f_isBaj(tM)+f_isBaj(tY)
 nVal = nAlc + nBaj
-domTrend = nVal == 0 ? "NEUTRAL" : nBaj > nAlc ? "BAJISTA" : nAlc > nBaj ? "ALCISTA" : "NEUTRAL"
-domCount = math.max(nAlc, nBaj)
+// Direccion UNICA por scoreGlobal (suma ponderada por fuerza). El semaforo, el
+// veredicto y el sesgo de la prediccion usan la MISMA base -> ya no se contradicen.
+domTrend = scoreGlobal > 0 ? "ALCISTA" : scoreGlobal < 0 ? "BAJISTA" : "NEUTRAL"
+domCount = scoreGlobal > 0 ? nAlc : scoreGlobal < 0 ? nBaj : math.max(nAlc, nBaj)
 
 // =============================================================================
 // 5) RESUMEN TACTICO INTRADIA / SWING / MACRO  (SPEC 7 extendido)
@@ -454,11 +455,8 @@ colSem   = semaforo == "VERDE" ? colAlc : semaforo == "ROJO" ? colBaj : colAviso
 // RSI del marco actual del grafico (matiz sobrecompra/sobreventa del veredicto).
 rsiChart = ta.rsi(close, lenRSI)
 
-veredicto = domTrend == "BAJISTA" and rsiChart < 35 ? "TECNICO BAJISTA PERO SOBREVENDIDA - PARA VIGILAR" : domTrend == "ALCISTA" and rsiChart > 65 ? "TECNICO ALCISTA PERO SOBRECOMPRADA - TOMAR CON CALMA" : "TENDENCIA " + domTrend + " - " + (close >= close[1] ? "MOMENTO VERDE" : "MOMENTO ROJO")
-
-trendDetail = nVal == 0 ? "Sin datos suficientes." : domTrend == "NEUTRAL" ? "Mixto: " + str.tostring(nAlc) + " alcista(s) vs " + str.tostring(nBaj) + " bajista(s) de " + str.tostring(nVal) + "." : domTrend + " en " + str.tostring(domCount) + "/" + str.tostring(nVal) + " marcos."
-
-lectEjec = veredicto + " (score global " + str.tostring(scoreGlobal) + ", " + trendDetail + ")"
+// (El veredicto ejecutivo ya se ve de forma coherente en el semaforo + la fila Sesgo
+//  de la tabla PREDICCION y en la matriz de 12 marcos; no se duplica como texto aparte.)
 
 // =============================================================================
 // 7) SOPORTES / RESISTENCIAS POR PIVOTES  (SPEC 8, invariante S < precio < R)
@@ -583,6 +581,9 @@ ebitdaQ1 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 1)   // trimestre ante
 ebitdaQ2 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 2)   // hace 2 trimestres
 ebitdaQ3 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 3)   // hace 3 trimestres
 ebitdaQ4 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 4)   // mismo trimestre del ano pasado (YoY)
+ebitdaQ5 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 5)   // trimestres 5..7 atras: TTM del ano pasado
+ebitdaQ6 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 6)
+ebitdaQ7 = ta.valuewhen(ta.change(ebitdaQ) != 0, ebitdaQ, 7)
 ebitdaY  = request.financial(syminfo.tickerid, "EBITDA", "FY", ignore_invalid_symbol = true)
 ebitdaY1 = ta.valuewhen(ta.change(ebitdaY) != 0, ebitdaY, 1)
 // --- EBIT (Operating Income) ---
@@ -719,9 +720,10 @@ votoRiesgo := votoRiesgo + (na(addVal)  ? 0 : addVal > 0 ? 1 : addVal < 0 ? -1 :
 votoRiesgo := votoRiesgo + (na(udRatio) ? 0 : udRatio > 1.5 ? 1 : udRatio < 0.67 ? -1 : 0)
 // RVOL solo amplifica (no decide direccion): si hay volumen anormal, refuerza el signo.
 rvolFuerte = not na(rvol) and rvol > 1.5
-lecturaInst = votoRiesgo >= 2 ? "RIESGO-ON (apetito)" : votoRiesgo <= -2 ? "RIESGO-OFF (miedo/cobertura)" : "MIXTO"
+nInternos = (na(vixVal) ? 0 : 1) + (na(pcceVal) ? 0 : 1) + (na(addVal) ? 0 : 1) + (na(udRatio) ? 0 : 1)
+lecturaInst = nInternos == 0 ? "n/d (no aplica)" : votoRiesgo >= 2 ? "RIESGO-ON (apetito)" : votoRiesgo <= -2 ? "RIESGO-OFF (miedo/cobertura)" : "MIXTO"
 lecturaInstFull = lecturaInst + (rvolFuerte ? " | volumen anormal" : "")
-colLectInst = votoRiesgo >= 2 ? colAlc : votoRiesgo <= -2 ? colBaj : colAviso
+colLectInst = nInternos == 0 ? colTxtT : votoRiesgo >= 2 ? colAlc : votoRiesgo <= -2 ? colBaj : colAviso
 
 // --- NUEVO (para el panel de abajo): P/E nativo + PRESION compra/venta + texto RVOL ---
 // P/E = precio / EPS anual (na si no hay EPS). Presion = voto de CMF + pendiente OBV + Acum/Dist.
@@ -742,7 +744,7 @@ revMax := na(revQ) ? revMax : na(revMax) ? revQ : math.max(revMax, revQ)
 // Ingreso de hace ~10 anos (40 reportes trimestrales atras) para el CAGR.
 revQ10    = ta.valuewhen(ta.change(revQ) != 0, revQ, 40)
 revCagr   = (na(revQ) or na(revQ10) or revQ10 <= 0) ? na : (math.pow(revQ / revQ10, 1.0 / 10.0) - 1) * 100
-revChgTot = (na(revQ) or na(revMin) or revMin <= 0) ? na : (revQ - revMin) / revMin * 100
+revChgTot = (na(revQ) or na(revQ10) or revQ10 <= 0) ? na : (revQ - revQ10) / revQ10 * 100
 
 // =============================================================================
 // 10) POSICIONES DE TABLA (input -> position.*)
@@ -835,8 +837,8 @@ var table tblP = na
 if showPred and barstate.islast
     tblP := table.new(f_pos(posPred), 2, 10, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera.
-    table.cell(tblP, 0, 0, "PREDICCION", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colSem, 0))
-    table.cell(tblP, 1, 0, predDir, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colSem, 0))
+    table.cell(tblP, 0, 0, "PREDICCION", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colObj, 0))
+    table.cell(tblP, 1, 0, predDir, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colObj, 0))
     // TF objetivo.
     table.cell(tblP, 0, 1, "TF objetivo", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblP, 1, 1, tfPred, text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
@@ -931,6 +933,8 @@ if showExtra and barstate.islast
 // =============================================================================
 // EBITDA TTM (ultimos 4 trimestres) — solo suma si los 4 existen.
 ebitdaTTM = (na(ebitdaQ) or na(ebitdaQ1) or na(ebitdaQ2) or na(ebitdaQ3)) ? na : ebitdaQ + ebitdaQ1 + ebitdaQ2 + ebitdaQ3
+// TTM del ano pasado (trimestres 4..7 atras) para el crecimiento YoY del TTM (no de 1 trimestre).
+ebitdaTTMprev = (na(ebitdaQ4) or na(ebitdaQ5) or na(ebitdaQ6) or na(ebitdaQ7)) ? na : ebitdaQ4 + ebitdaQ5 + ebitdaQ6 + ebitdaQ7
 
 var table tblF = na
 if showFund and barstate.islast
@@ -970,7 +974,7 @@ if showFund and barstate.islast
     table.cell(tblF, 0, 6, "EBITDA 4T", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblF, 1, 6, f_money(ebitdaTTM), text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblF, 2, 6, "TTM (4Q)", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    table.cell(tblF, 3, 6, f_growth(ebitdaQ, ebitdaQ4), text_color = f_growthCol(ebitdaQ, ebitdaQ4), text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblF, 3, 6, f_growth(ebitdaTTM, ebitdaTTMprev), text_color = f_growthCol(ebitdaTTM, ebitdaTTMprev), text_size = size.tiny, bgcolor = color.new(colHead, 0))
 
 // =============================================================================
 // 15B) TABLA INSTITUCIONAL / FLUJO  (VIX / Put-Call / Amplitud / Vol / OBV /
@@ -1079,7 +1083,7 @@ if showInst and barstate.islast
     f_filaFund(tblI, 3, "EBIT",   f_money(ebitQ),   f_money(ebitY),   f_growth(ebitY, ebitY1),     f_growthCol(ebitY, ebitY1))
     f_filaFund(tblI, 4, "Neto",   f_money(netQ),    f_money(netY),    f_growth(netY, netY1),       f_growthCol(netY, netY1))
     f_filaFund(tblI, 5, "EPS",    f_num(epsQ),      f_num(epsY),      f_growth(epsY, epsY1),       f_growthCol(epsY, epsY1))
-    f_filaFund(tblI, 6, "EBITDA 4T", f_money(ebitdaTTM), "TTM(4Q)",   f_growth(ebitdaQ, ebitdaQ4), f_growthCol(ebitdaQ, ebitdaQ4))
+    f_filaFund(tblI, 6, "EBITDA 4T", f_money(ebitdaTTM), "TTM(4Q)",   f_growth(ebitdaTTM, ebitdaTTMprev), f_growthCol(ebitdaTTM, ebitdaTTMprev))
     // P/E (precio / EPS anual).
     _bgPE = color.new(colFila, 0)
     table.cell(tblI, 0, 7, "P/E", text_color = colTxt, text_size = size.tiny, bgcolor = _bgPE)
@@ -1122,7 +1126,7 @@ if showRev and barstate.islast
     table.cell(tblRev, 0, 4, "CAGR 10A", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
     table.cell(tblRev, 1, 4, na(revCagr) ? "n/d" : (revCagr >= 0 ? "+" : "") + str.tostring(math.round(revCagr * 10) / 10) + "%", text_color = revCagrCol, text_size = size.tiny, bgcolor = color.new(colFondo, 0))
     revChgCol = na(revChgTot) ? colTxtT : revChgTot >= 0 ? colAlc : colBaj
-    table.cell(tblRev, 0, 5, "Cambio total", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblRev, 0, 5, "Cambio 10A", text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
     table.cell(tblRev, 1, 5, na(revChgTot) ? "n/d" : (revChgTot >= 0 ? "+" : "") + str.tostring(math.round(revChgTot)) + "%", text_color = revChgCol, text_size = size.tiny, bgcolor = color.new(colFila, 0))
 
 // =============================================================================
@@ -1154,7 +1158,7 @@ f_jmoney(float _v) =>
     na(_v) ? "null" : str.tostring(_v, "#.##")
 
 f_jsonTF(string _etq, int _t, float _k, int _se, int _sf, float _h, int _me, int _mf) =>
-    f_q(_etq) + ":{" + f_q("trend") + ":" + f_q(f_trendEstado(_t)) + "," + f_q("stochK") + ":" + str.tostring(_k, "#.##") + "," + f_q("stochEstado") + ":" + f_q(f_stEstadoTxt(_se)) + "," + f_q("stochFuerza") + ":" + f_q(f_stFuerzaTxt(_sf)) + "," + f_q("macdHist") + ":" + str.tostring(_h, "#.####") + "," + f_q("macdEstado") + ":" + f_q(f_mcEstadoTxt(_me)) + "," + f_q("macdFuerza") + ":" + f_q(f_mcFuerzaTxt(_mf)) + "}"
+    f_q(_etq) + ":{" + f_q("trend") + ":" + f_q(f_trendEstado(_t)) + "," + f_q("stochK") + ":" + (na(_k) ? "null" : str.tostring(_k, "#.##")) + "," + f_q("stochEstado") + ":" + f_q(f_stEstadoTxt(_se)) + "," + f_q("stochFuerza") + ":" + f_q(f_stFuerzaTxt(_sf)) + "," + f_q("macdHist") + ":" + (na(_h) ? "null" : str.tostring(_h, "#.####")) + "," + f_q("macdEstado") + ":" + f_q(f_mcEstadoTxt(_me)) + "," + f_q("macdFuerza") + ":" + f_q(f_mcFuerzaTxt(_mf)) + "}"
 
 if emitAI and barstate.isconfirmed
     tfBlock = "{" + f_jsonTF("1m",  t1,  k1,  se1,  sf1,  h1,  me1,  mf1 ) + "," + f_jsonTF("3m",  t3,  k3,  se3,  sf3,  h3,  me3,  mf3 ) + "," + f_jsonTF("5m",  t5,  k5,  se5,  sf5,  h5,  me5,  mf5 ) + "," + f_jsonTF("15m", t15, k15, se15, sf15, h15, me15, mf15) + "," + f_jsonTF("30m", t30, k30, se30, sf30, h30, me30, mf30) + "," + f_jsonTF("1H",  t60, k60, se60, sf60, h60, me60, mf60) + "," + f_jsonTF("2H",  t120,k120,se120,sf120,h120,me120,mf120) + "," + f_jsonTF("4H",  t240,k240,se240,sf240,h240,me240,mf240) + "," + f_jsonTF("Diario", tD, kD, seD, sfD, hD, meD, mfD) + "," + f_jsonTF("Semanal", tW, kW, seW, sfW, hW, meW, mfW) + "," + f_jsonTF("Mensual", tM, kM, seM, sfM, hM, meM, mfM) + "," + f_jsonTF("Anual", tY, kY, seY, sfY, hY, meY, mfY) + "}"
