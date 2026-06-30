@@ -109,7 +109,7 @@ atrMult  = input.float(1.5, "Multiplo de ATR para el objetivo", minval = 0.1, st
 
 grpExtra = "Indicadores EXTRA (RSI / MACD / ATR / dist SMA200)"
 showExtra = input.bool(true, "Mostrar tabla de indicadores extra", group = grpExtra)
-posExtra  = input.string("Centro izquierda", "Posicion extra", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpExtra)
+posExtra  = input.string("Arriba centro", "Posicion extra", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpExtra)
 
 grpFund = "FUNDAMENTALES (request.financial)"
 showFund = input.bool(false, "Mostrar tabla de fundamentales aparte (ya van en el panel de abajo)", group = grpFund)
@@ -551,6 +551,50 @@ objTxt   = na(objetivoPrincipal) ? "-" : str.tostring(objetivoPrincipal, format.
 stopTxt  = na(stopPrincipal) ? "-" : str.tostring(stopPrincipal, format.mintick)
 sesgoTxt = predTendObj + (rompeAlza ? " (rompe al alza)" : rompeBaja ? " (rompe a la baja)" : "") + " (" + str.tostring(predScoreObj) + ")"
 
+// =============================================================================
+// 8B) PATRONES DE VELAS (candlestick) — set curado; lectura SUBE / BAJA / INDECISION
+// -----------------------------------------------------------------------------
+// Se calculan sobre las velas del grafico. Martillo/envolvente/estrellas, etc.
+// Algunos dependen del contexto de tendencia (martillo = en bajada, estrella
+// fugaz = en subida). Se muestra el patron mas reciente de las ultimas 3 velas.
+// =============================================================================
+cBody = math.abs(close - open)
+cRng  = high - low
+cUp   = high - math.max(close, open)
+cDn   = math.min(close, open) - low
+cTrUp = close > ta.ema(close, 20)
+cTrDn = close < ta.ema(close, 20)
+cMid2 = (open[2] + close[2]) / 2
+cSmall     = cRng > 0 and cBody <= cRng * 0.35
+cLowerLong = cDn >= cBody * 2 and cUp <= cBody * 0.6
+cUpperLong = cUp >= cBody * 2 and cDn <= cBody * 0.6
+cDojiBase  = cRng > 0 and cBody <= cRng * 0.1
+// 1 vela
+pHammer       = cSmall and cLowerLong and cTrDn
+pHangingMan   = cSmall and cLowerLong and cTrUp
+pInvHammer    = cSmall and cUpperLong and cTrDn
+pShootingStar = cSmall and cUpperLong and cTrUp
+pGravestone   = cDojiBase and cUp >= cRng * 0.6 and cDn <= cRng * 0.1
+pDragonfly    = cDojiBase and cDn >= cRng * 0.6 and cUp <= cRng * 0.1
+pDoji         = cDojiBase and not pGravestone and not pDragonfly
+pSpinning     = cRng > 0 and cBody <= cRng * 0.35 and cUp >= cBody * 0.8 and cDn >= cBody * 0.8 and not cDojiBase
+// 2 velas (envolventes)
+pBullEngulf = close[1] < open[1] and close > open and close >= open[1] and open <= close[1]
+pBearEngulf = close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
+// 3 velas (estrellas)
+pMorningStar = close[2] < open[2] and cBody[1] <= math.abs(close[2] - open[2]) * 0.5 and close > open and close > cMid2 and cBody[1] < cBody[2]
+pEveningStar = close[2] > open[2] and cBody[1] <= math.abs(close[2] - open[2]) * 0.5 and close < open and close < cMid2 and cBody[1] < cBody[2]
+// Nombre y sesgo por PRIORIDAD (3 velas > 2 velas > 1 vela).
+patName = pEveningStar ? "Estrella vespertina" : pMorningStar ? "Estrella amanecer" : pBullEngulf ? "Envolvente alcista" : pBearEngulf ? "Envolvente bajista" : pHammer ? "Martillo" : pHangingMan ? "Hombre colgado" : pInvHammer ? "Martillo invertido" : pShootingStar ? "Estrella fugaz" : pGravestone ? "Doji lapida" : pDragonfly ? "Doji libelula" : pSpinning ? "Trompo" : pDoji ? "Doji" : "Ninguno"
+patBias = pEveningStar ? -1 : pMorningStar ? 1 : pBullEngulf ? 1 : pBearEngulf ? -1 : pHammer ? 1 : pHangingMan ? -1 : pInvHammer ? 1 : pShootingStar ? -1 : pGravestone ? -1 : pDragonfly ? 1 : 0
+// Patron mas reciente dentro de las ultimas 3 velas (las series string/int permiten [n]).
+patRecName = patName != "Ninguno" ? patName : patName[1] != "Ninguno" ? patName[1] : patName[2] != "Ninguno" ? patName[2] : "Ninguno reciente"
+patRecBias = patName != "Ninguno" ? patBias : patName[1] != "Ninguno" ? patBias[1] : patName[2] != "Ninguno" ? patBias[2] : 0
+patRecAge  = patName != "Ninguno" ? 0 : patName[1] != "Ninguno" ? 1 : patName[2] != "Ninguno" ? 2 : -1
+patVeredic = patRecName == "Ninguno reciente" ? "sin patron" : patRecBias > 0 ? "SUBE" : patRecBias < 0 ? "BAJA" : "INDECISION"
+patCol     = patRecBias > 0 ? colAlc : patRecBias < 0 ? colBaj : colAviso
+patNameTxt = patRecAge <= 0 ? patRecName : patRecName + " (hace " + str.tostring(patRecAge) + ")"
+
 // --- CONFLUENCIA EJECUTIVA: alineacion de los 3 grupos (INTRADIA/SWING/MACRO) ---
 // Se calcula aqui (antes de pintar la tabla de prediccion) para poder mostrarla
 // como ultima fila de esa tabla y enviarla tambien en el JSON de la IA.
@@ -835,7 +879,7 @@ if showTact and barstate.islast
 var table tblP = na
 
 if showPred and barstate.islast
-    tblP := table.new(f_pos(posPred), 2, 10, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
+    tblP := table.new(f_pos(posPred), 2, 12, bgcolor = color.new(colFondo, 6), frame_color = color.new(colBorde, 30), frame_width = 1, border_color = color.new(colBorde, 55), border_width = 1)
     // Cabecera.
     table.cell(tblP, 0, 0, "PREDICCION", text_color = color.white, text_size = size.tiny, bgcolor = color.new(colObj, 0))
     table.cell(tblP, 1, 0, predDir, text_color = color.white, text_size = size.tiny, bgcolor = color.new(colObj, 0))
@@ -863,9 +907,14 @@ if showPred and barstate.islast
     // Confluencia (alineacion de los 3 grupos) + consejo.
     table.cell(tblP, 0, 8, "Confluencia", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
     table.cell(tblP, 1, 8, confluencia + " - " + consejoConf, text_color = colConf, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    // Patron de velas (candlestick): prediccion ADICIONAL por la forma de las velas.
+    table.cell(tblP, 0, 9, "Patron velas", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 9, patNameTxt, text_color = colTxt, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 10, "Velas dice", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 10, patVeredic, text_color = color.white, text_size = size.tiny, bgcolor = color.new(patCol, 0))
     // Aviso.
-    table.cell(tblP, 0, 9, "Aviso", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
-    table.cell(tblP, 1, 9, "Orientativa: PUEDE FALLAR. No es recomendacion.", text_color = colAviso, text_size = size.tiny, bgcolor = color.new(colFila, 0))
+    table.cell(tblP, 0, 11, "Aviso", text_color = colTxtT, text_size = size.tiny, bgcolor = color.new(colHead, 0))
+    table.cell(tblP, 1, 11, "Orientativa: PUEDE FALLAR. No es recomendacion.", text_color = colAviso, text_size = size.tiny, bgcolor = color.new(colFila, 0))
 
 // Etiqueta flotante OPCIONAL (off por defecto; el panel principal es la tabla).
 var label predLbl = na
