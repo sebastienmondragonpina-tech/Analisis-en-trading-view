@@ -117,7 +117,7 @@ posFund  = input.string("Arriba izquierda", "Posicion fundamentales", options = 
 
 grpRev = "INGRESOS - trayectoria (min/max + CAGR 10A + cambio total)"
 showRev = input.bool(true, "Mostrar tabla de trayectoria de ingresos", group = grpRev)
-posRev  = input.string("Arriba izquierda", "Posicion ingresos", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpRev)
+posRev  = input.string("Centro izquierda", "Posicion ingresos", options = ["Arriba izquierda","Arriba derecha","Abajo izquierda","Abajo derecha","Centro derecha","Centro izquierda","Arriba centro","Abajo centro"], group = grpRev)
 
 grpInst = "PANEL DE ABAJO: Fundamental + Flujo (Ventas/EBITDA/EBIT/Neto/EPS/PE + presion + volumen + riesgo)"
 showInst = input.bool(true, "Mostrar panel Fundamental + Flujo (abajo)", group = grpInst)
